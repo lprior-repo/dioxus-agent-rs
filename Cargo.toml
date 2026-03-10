@@ -1,0 +1,13 @@
+[package]
+name = "dioxus-agent-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+base64 = "0.22.1"
+clap = { version = "4.5.60", features = ["derive"] }
+fantoccini = "0.22.1"
+futures = "0.3.32"
+serde_json = "1.0.149"
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
