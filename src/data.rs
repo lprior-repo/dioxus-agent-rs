@@ -310,6 +310,10 @@ pub enum Commands {
         /// CSS property name
         property: String,
     },
+
+    // ============ Interactive ============
+    /// Start an interactive REPL session
+    Repl,
 }
 
 /// Runtime configuration after validation

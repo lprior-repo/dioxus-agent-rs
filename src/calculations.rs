@@ -172,6 +172,7 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         | Commands::WaitNav
         | Commands::WaitHydration
         | Commands::DioxusState
+        | Commands::Repl
         | Commands::ScrollBy { .. } => Ok(()),
     }
 }

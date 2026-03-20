@@ -54,12 +54,73 @@ pub async fn execute_command(config: Config) -> Result<()> {
     inject_console_capture(&mut client).await?;
 
     // Execute the command
-    let result = execute_command_internal(&mut client, &config).await;
+    let result = if matches!(config.command, Commands::Repl) {
+        run_repl(&mut client).await
+    } else {
+        execute_command_internal(&mut client, &config.command).await
+    };
 
     // Clean up
     let _ = client.close().await;
 
     result
+}
+
+async fn run_repl(client: &mut fantoccini::Client) -> Result<()> {
+    let current_url = client.current_url().await.map(|u| u.to_string()).unwrap_or_default();
+    println!("Dioxus Agent REPL connected to {current_url}");
+    println!("Type 'help' for commands, 'exit' to quit.");
+
+    // Using rustyline for REPL inside tokio spawn_blocking
+    let mut rl = rustyline::DefaultEditor::new()?;
+    
+    loop {
+        let readline = tokio::task::block_in_place(|| rl.readline("dioxus> "));
+        match readline {
+            Ok(line) => {
+                let input = line.trim();
+                if input.is_empty() {
+                    continue;
+                }
+                if input == "exit" || input == "quit" {
+                    break;
+                }
+                let _ = rl.add_history_entry(input);
+
+                if let Some(mut args) = shlex::split(input) {
+                    args.insert(0, "dioxus-agent-rs".to_string());
+                    
+                    match clap::Parser::try_parse_from(args) {
+                        Ok(crate::data::Cli { command: cmd, .. }) => {
+                            if matches!(cmd, Commands::Repl) {
+                                println!("Already in REPL mode.");
+                                continue;
+                            }
+                            if let Err(e) = execute_command_internal(client, &cmd).await {
+                                println!("Error: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            println!("{e}");
+                        }
+                    }
+                }
+            }
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break;
+            }
+            Err(rustyline::error::ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Inject console capture script
@@ -82,8 +143,8 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
 
 /// Internal command execution - handles all 50+ commands
 #[allow(clippy::unnecessary_mut_passed)]
-async fn execute_command_internal(client: &mut fantoccini::Client, config: &Config) -> Result<()> {
-    match &config.command {
+async fn execute_command_internal(client: &mut fantoccini::Client, command: &Commands) -> Result<()> {
+    match command {
         // ============ Navigation ============
         Commands::Dom => {
             let source = client.source().await.context("Failed to get DOM")?;
@@ -501,6 +562,9 @@ async fn execute_command_internal(client: &mut fantoccini::Client, config: &Conf
             } else {
                 println!("{result}");
             }
+        }
+        Commands::Repl => {
+            // Handled externally
         }
     }
 
