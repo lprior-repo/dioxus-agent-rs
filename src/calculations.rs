@@ -61,12 +61,26 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         | Commands::Exists { selector }
         | Commands::Scroll { selector }
         | Commands::Classes { selector }
+        | Commands::AssertVisible { selector }
+        | Commands::AssertExists { selector }
         | Commands::ElementScreenshot { selector, .. } => validate_non_empty_selector(selector),
 
         // Commands with selector + value
         Commands::Text { selector, value } | Commands::Select { selector, value } => {
             validate_non_empty_selector(selector)?;
             validate_non_empty(value, "value")
+        }
+
+        // Commands with selector + path
+        Commands::Upload { selector, path } => {
+            validate_non_empty_selector(selector)?;
+            validate_non_empty(path, "path")
+        }
+
+        // Commands with selector + expected
+        Commands::AssertText { selector, expected } => {
+            validate_non_empty_selector(selector)?;
+            validate_non_empty(expected, "expected")
         }
 
         // Commands with selector + attribute
@@ -171,6 +185,7 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         | Commands::LocalClear
         | Commands::SessionClear
         | Commands::Console
+        | Commands::NetworkLogs
         | Commands::Wait { .. }
         | Commands::WaitGone { .. }
         | Commands::WaitNav

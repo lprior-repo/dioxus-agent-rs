@@ -320,6 +320,34 @@ pub enum Commands {
     /// Extract a semantic/accessibility tree of interactable elements
     SemanticTree,
 
+    // ============ AI Agent Extended ============
+    /// Upload a file to a file input
+    Upload {
+        /// The CSS selector (must be input[type="file"])
+        selector: String,
+        /// Absolute path to the local file
+        path: String,
+    },
+    /// Get intercepted network requests
+    NetworkLogs,
+    /// Assert that an element contains specific text
+    AssertText {
+        /// The CSS selector
+        selector: String,
+        /// The expected text
+        expected: String,
+    },
+    /// Assert that an element exists and is visible
+    AssertVisible {
+        /// The CSS selector
+        selector: String,
+    },
+    /// Assert that an element exists
+    AssertExists {
+        /// The CSS selector
+        selector: String,
+    },
+
     // ============ Style ============
     /// Get computed style property
     Style {

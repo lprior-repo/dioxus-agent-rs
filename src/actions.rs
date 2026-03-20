@@ -187,6 +187,7 @@ async fn run_repl(client: &mut fantoccini::Client) -> Result<()> {
 async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
     let js = "
         window.__captured_logs = [];
+        window.__captured_network = [];
         ['log', 'warn', 'error', 'info', 'debug'].forEach(type => {
             window['__captured_' + type] = [];
             const original = console[type];
@@ -195,6 +196,17 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
                 original.apply(console, args);
             };
         });
+        const originalFetch = window.fetch;
+        window.fetch = async function(...args) {
+            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || 'unknown';
+            window.__captured_network.push({ type: 'fetch', url: url });
+            return originalFetch.apply(this, args);
+        };
+        const originalXhrOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            window.__captured_network.push({ type: 'xhr', method, url });
+            return originalXhrOpen.apply(this, [method, url, ...rest]);
+        };
     ";
     let _ = client.execute(js, vec![]).await;
     Ok(())
@@ -674,6 +686,70 @@ async fn execute_command_internal(
                 Ok(serde_json::json!(target))
             } else {
                 anyhow::bail!("Target not found: {target}");
+            }
+        }
+
+        // ============ AI Agent Extended ============
+        Commands::Upload { selector, path } => {
+            let el = client
+                .find(Locator::Css(selector))
+                .await
+                .with_context(|| format!("Element not found: {selector}"))?;
+
+            // Resolve to absolute path if needed
+            let abs_path = std::fs::canonicalize(path).context("Invalid path")?;
+            el.send_keys(abs_path.to_str().unwrap_or(""))
+                .await
+                .context("Failed to upload file")?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::NetworkLogs => {
+            let result: Value = client
+                .execute("return window.__captured_network || [];", vec![])
+                .await?;
+            let mut results = Vec::new();
+            if let Some(arr) = result.as_array() {
+                for entry in arr {
+                    results.push(entry.clone());
+                }
+            }
+            Ok(serde_json::json!(results))
+        }
+        Commands::AssertText { selector, expected } => {
+            let el = client
+                .find(Locator::Css(selector))
+                .await
+                .with_context(|| format!("Element not found: {selector}"))?;
+            let text = el.text().await.context("Failed to get text")?;
+            if text.contains(expected) {
+                Ok(serde_json::json!(true))
+            } else {
+                anyhow::bail!(
+                    "Text assertion failed. Expected to contain: '{expected}', found: '{text}'"
+                );
+            }
+        }
+        Commands::AssertVisible { selector } => {
+            let js = format!(
+                "const el = document.querySelector('{}'); if (!el) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';",
+                selector.replace('\'', "\\'")
+            );
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("Failed to check visibility")?;
+            if result.as_bool() == Some(true) {
+                Ok(serde_json::json!(true))
+            } else {
+                anyhow::bail!("Visibility assertion failed for: {selector}");
+            }
+        }
+        Commands::AssertExists { selector } => {
+            let exists = client.find(Locator::Css(selector)).await.is_ok();
+            if exists {
+                Ok(serde_json::json!(true))
+            } else {
+                anyhow::bail!("Existence assertion failed for: {selector}");
             }
         }
 
