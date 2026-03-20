@@ -32,6 +32,10 @@ pub fn validate_inputs(cli: &Cli) -> Result<Config, String> {
     Ok(Config {
         url: cli.url.clone(),
         timeout: Duration::from_secs(cli.timeout),
+        webdriver_url: cli.webdriver_url.clone(),
+        no_headless: cli.no_headless,
+        json: cli.json,
+        auto_wait: cli.auto_wait,
         command: cli.command.clone(),
     })
 }
@@ -126,7 +130,7 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
             if valid {
                 Ok(())
             } else {
-                Err(format!("invalid console type: {}", r#type))
+                Err(format!("invalid console type: {type}"))
             }
         }
 
@@ -172,8 +176,11 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         | Commands::WaitNav
         | Commands::WaitHydration
         | Commands::DioxusState
+        | Commands::SemanticTree
         | Commands::Repl
         | Commands::ScrollBy { .. } => Ok(()),
+
+        Commands::ScreenshotAnnotated { path } => validate_non_empty(path, "path"),
     }
 }
 
@@ -209,6 +216,7 @@ fn validate_storage_key(key: &str) -> Result<(), String> {
 
 /// Generate JavaScript for keyboard actions
 /// Pure function - no side effects
+#[must_use]
 pub fn generate_keypress_js(key: &str) -> String {
     let key_lower = key.to_lowercase();
     match key_lower.as_str() {
@@ -234,7 +242,7 @@ pub fn generate_keycombo_js(combo: &str) -> String {
     let parts: Vec<String> = combo
         .split('+')
         .map(str::trim)
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     let mut modifiers = Vec::new();
@@ -247,7 +255,7 @@ pub fn generate_keycombo_js(combo: &str) -> String {
             "shift" => modifiers.push("shiftKey"),
             "alt" => modifiers.push("altKey"),
             "meta" | "cmd" | "command" => modifiers.push("metaKey"),
-            _ => key = Some(part.to_string()), // Keep original case for special keys
+            _ => key = Some(part.clone()), // Keep original case for special keys
         }
     }
 
@@ -269,6 +277,7 @@ pub fn generate_keycombo_js(combo: &str) -> String {
 }
 
 /// Generate storage JS
+#[must_use]
 pub fn generate_storage_js(
     storage: &str,
     op: &str,
@@ -309,6 +318,7 @@ pub fn generate_storage_js(
 }
 
 /// Escape string for JavaScript
+#[must_use]
 pub fn escape_js_string(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\'', "\\'")
@@ -318,18 +328,19 @@ pub fn escape_js_string(s: &str) -> String {
 }
 
 /// Generate CSS injection JS
+#[must_use]
 pub fn generate_css_injection_js(css: &str) -> String {
     let escaped = css.replace('\'', "\\'").replace('\n', " ");
     format!(
         "const style = document.createElement('style'); \
-        style.textContent = '{}'; \
+        style.textContent = '{escaped}'; \
         document.head.appendChild(style); \
-        return true;",
-        escaped
+        return true;"
     )
 }
 
 /// Generate element screenshot JS
+#[must_use]
 pub fn generate_element_screenshot_js(selector: &str) -> String {
     format!(
         "const el = document.querySelector('{}'); \
@@ -341,6 +352,7 @@ pub fn generate_element_screenshot_js(selector: &str) -> String {
 }
 
 /// Generate Dioxus click JS
+#[must_use]
 pub fn generate_dioxus_click_js(target: &str) -> String {
     format!(
         "const el = document.querySelector('[data-target=\"{}\"]'); \
@@ -351,8 +363,10 @@ pub fn generate_dioxus_click_js(target: &str) -> String {
 }
 
 /// Generate Dioxus state JS
+#[must_use]
 pub fn generate_dioxus_state_js() -> String {
-    "if (typeof window.__DX_STATE__ !== 'undefined') { return window.__DX_STATE__; } \
+    "if (typeof window.getDioxusState === 'function') { return window.getDioxusState(); } \
+     if (typeof window.__DX_STATE__ !== 'undefined') { return window.__DX_STATE__; } \
      const states = []; \
      for (let key in window) { \
          if (key.startsWith('__dx') || key.startsWith('__dioxus')) { \
@@ -364,23 +378,100 @@ pub fn generate_dioxus_state_js() -> String {
 }
 
 /// Generate hydration wait JS
+#[must_use]
 pub fn generate_hydration_wait_js() -> String {
     "return new Promise((resolve) => { \
-        if (document.body.hasAttribute('data-hydrated')) {{ resolve(true); return; }} \
-        const observer = new MutationObserver((mutations) => { \
-            for (const mut of mutations) { \
-                if (mut.type === 'attributes' && mut.attributeName === 'data-hydrated') { \
-                    observer.disconnect(); resolve(true); return; \
-                } \
-            } \
+        const checkReady = () => { \
+            const hasSuspense = document.querySelector('[aria-busy=\"true\"]'); \
+            const hasHydrated = document.body.hasAttribute('data-hydrated') || document.querySelector('#main') || document.body.innerHTML.length > 50; \
+            if (hasHydrated && !hasSuspense) { resolve(true); return true; } \
+            return false; \
+        }; \
+        if (checkReady()) return; \
+        const observer = new MutationObserver(() => { \
+            if (checkReady()) { observer.disconnect(); resolve(true); } \
         }); \
-        observer.observe(document.body, {{ attributes: true }}); \
-        setTimeout(() => {{ observer.disconnect(); resolve(true); }}, 10000); \
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true }); \
+        setTimeout(() => { observer.disconnect(); resolve(true); }, 10000); \
     });"
     .into()
 }
 
+/// Generate Semantic Tree JS
+#[must_use]
+pub fn generate_semantic_tree_js() -> String {
+    "function getSemanticTree(root) { \
+        const tree = []; \
+        const iter = document.createNodeIterator(root, NodeFilter.SHOW_ELEMENT, { \
+            acceptNode: (node) => { \
+                const tag = node.tagName.toLowerCase(); \
+                const interactable = ['a', 'button', 'input', 'select', 'textarea'].includes(tag) || node.hasAttribute('role') || node.hasAttribute('tabindex'); \
+                if (!interactable) return NodeFilter.FILTER_SKIP; \
+                const style = window.getComputedStyle(node); \
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return NodeFilter.FILTER_REJECT; \
+                return NodeFilter.FILTER_ACCEPT; \
+            } \
+        }); \
+        let node; \
+        while (node = iter.nextNode()) { \
+            const tag = node.tagName.toLowerCase(); \
+            let label = node.innerText || node.value || node.getAttribute('aria-label') || node.getAttribute('title') || ''; \
+            label = label.substring(0, 50).replace(/\\n/g, ' ').trim(); \
+            let id = node.id ? '#' + node.id : ''; \
+            let cls = node.className ? '.' + node.className.split(' ').join('.') : ''; \
+            let sel = id ? id : (cls ? tag + cls : tag); \
+            tree.push(`[${tag.toUpperCase()}] ${sel} \"${label}\"`); \
+        } \
+        return tree.join('\\n'); \
+    } \
+    return getSemanticTree(document.body);"
+        .into()
+}
+
+/// Generate Screenshot Annotated JS
+#[must_use]
+pub fn generate_screenshot_annotated_js() -> String {
+    "const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_ELEMENT, { \
+        acceptNode: (node) => { \
+            const tag = node.tagName.toLowerCase(); \
+            const interactable = ['a', 'button', 'input', 'select', 'textarea'].includes(tag) || node.hasAttribute('role') || node.hasAttribute('tabindex'); \
+            if (!interactable) return NodeFilter.FILTER_SKIP; \
+            const style = window.getComputedStyle(node); \
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return NodeFilter.FILTER_REJECT; \
+            return NodeFilter.FILTER_ACCEPT; \
+        } \
+    }); \
+    let node; let counter = 1; \
+    while (node = iter.nextNode()) { \
+        const rect = node.getBoundingClientRect(); \
+        if (rect.width === 0 || rect.height === 0) continue; \
+        const overlay = document.createElement('div'); \
+        overlay.style.position = 'absolute'; \
+        overlay.style.left = `${rect.left + window.scrollX}px`; \
+        overlay.style.top = `${rect.top + window.scrollY}px`; \
+        overlay.style.width = `${rect.width}px`; \
+        overlay.style.height = `${rect.height}px`; \
+        overlay.style.border = '2px solid red'; \
+        overlay.style.pointerEvents = 'none'; \
+        overlay.style.zIndex = '999999'; \
+        const label = document.createElement('span'); \
+        label.style.position = 'absolute'; \
+        label.style.background = 'red'; \
+        label.style.color = 'white'; \
+        label.style.fontSize = '12px'; \
+        label.style.top = '-14px'; \
+        label.style.left = '-2px'; \
+        label.style.padding = '0 2px'; \
+        label.innerText = counter++; \
+        overlay.appendChild(label); \
+        document.body.appendChild(overlay); \
+    } \
+    return true;"
+        .into()
+}
+
 /// Generate computed style JS
+#[must_use]
 pub fn generate_computed_style_js(selector: &str, property: &str) -> String {
     format!(
         "const el = document.querySelector('{}'); \
@@ -392,6 +483,7 @@ pub fn generate_computed_style_js(selector: &str, property: &str) -> String {
 }
 
 /// Generate wait for element JS
+#[must_use]
 pub fn generate_wait_element_js(selector: &str) -> String {
     format!(
         "return new Promise((resolve) => {{ \
@@ -409,6 +501,7 @@ pub fn generate_wait_element_js(selector: &str) -> String {
 }
 
 /// Generate wait for element gone JS
+#[must_use]
 pub fn generate_wait_gone_js(selector: &str) -> String {
     format!(
         "return new Promise((resolve) => {{ \
@@ -426,9 +519,10 @@ pub fn generate_wait_gone_js(selector: &str) -> String {
 }
 
 /// Generate console capture JS
+#[must_use]
 pub fn generate_console_js(console_type: Option<&str>) -> String {
     match console_type {
-        Some(t) => format!("return window.__captured_{} || [];", t),
+        Some(t) => format!("return window.__captured_{t} || [];"),
         None => "return window.__captured_logs || [];".into(),
     }
 }

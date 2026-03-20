@@ -24,6 +24,22 @@ pub struct Cli {
     #[arg(short, long, default_value = "10")]
     pub timeout: u64,
 
+    /// `WebDriver` URL
+    #[arg(long, default_value = "http://localhost:4444")]
+    pub webdriver_url: String,
+
+    /// Run the browser in headed mode (visible)
+    #[arg(long)]
+    pub no_headless: bool,
+
+    /// Output all results as structured JSON
+    #[arg(long)]
+    pub json: bool,
+
+    /// Automatically wait for Dioxus hydration before interacting
+    #[arg(long)]
+    pub auto_wait: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -301,6 +317,8 @@ pub enum Commands {
         /// The target ID
         target: String,
     },
+    /// Extract a semantic/accessibility tree of interactable elements
+    SemanticTree,
 
     // ============ Style ============
     /// Get computed style property
@@ -314,6 +332,13 @@ pub enum Commands {
     // ============ Interactive ============
     /// Start an interactive REPL session
     Repl,
+
+    // ============ Agent Vision ============
+    /// Take screenshot with annotated bounding boxes for interactable elements
+    ScreenshotAnnotated {
+        /// Path to save the screenshot
+        path: String,
+    },
 }
 
 /// Runtime configuration after validation
@@ -321,6 +346,10 @@ pub enum Commands {
 pub struct Config {
     pub url: String,
     pub timeout: Duration,
+    pub webdriver_url: String,
+    pub no_headless: bool,
+    pub json: bool,
+    pub auto_wait: bool,
     pub command: Commands,
 }
 
@@ -329,7 +358,24 @@ impl From<Cli> for Config {
         Self {
             url: cli.url,
             timeout: Duration::from_secs(cli.timeout),
+            webdriver_url: cli.webdriver_url,
+            no_headless: cli.no_headless,
+            json: cli.json,
+            auto_wait: cli.auto_wait,
             command: cli.command,
         }
     }
+}
+
+/// JSON Output format for AI agents
+#[derive(serde::Serialize)]
+pub struct CommandOutput {
+    pub success: bool,
+    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    pub data: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub logs: Vec<String>,
 }
