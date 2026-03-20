@@ -703,6 +703,35 @@ async fn execute_command_internal(
                 .context("Failed to upload file")?;
             Ok(serde_json::json!(selector))
         }
+        Commands::FillForm { json_data } => {
+            let map: serde_json::Map<String, Value> = serde_json::from_str(json_data)?;
+            let mut results = Vec::new();
+            for (selector, val) in map {
+                let text_val = match val {
+                    Value::String(s) => s,
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => continue,
+                };
+                let el = client
+                    .find(Locator::Css(&selector))
+                    .await
+                    .with_context(|| format!("Element not found: {selector}"))?;
+
+                // Clear first
+                let backspace: &str = &"\u{0008}".repeat(100);
+                let delete: &str = "\u{0001}\u{0003}";
+                el.send_keys(backspace).await?;
+                el.send_keys(delete).await?;
+
+                // Send new text
+                el.send_keys(&text_val)
+                    .await
+                    .context("Failed to set text")?;
+                results.push(selector);
+            }
+            Ok(serde_json::json!(results))
+        }
         Commands::NetworkLogs => {
             let result: Value = client
                 .execute("return window.__captured_network || [];", vec![])

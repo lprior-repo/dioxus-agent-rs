@@ -77,6 +77,19 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
             validate_non_empty(path, "path")
         }
 
+        // Commands with json
+        Commands::FillForm { json_data } => {
+            if json_data.trim().is_empty() {
+                return Err("json_data cannot be empty".into());
+            }
+            if let Err(e) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json_data)
+            {
+                return Err(format!("Invalid JSON object: {e}"));
+            }
+            Ok(())
+        }
+
         // Commands with selector + expected
         Commands::AssertText { selector, expected } => {
             validate_non_empty_selector(selector)?;

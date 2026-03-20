@@ -328,6 +328,11 @@ pub enum Commands {
         /// Absolute path to the local file
         path: String,
     },
+    /// Fill multiple inputs from a JSON mapping of selector -> value
+    FillForm {
+        /// JSON string mapping CSS selectors to values (e.g., '{"#username": "admin"}')
+        json_data: String,
+    },
     /// Get intercepted network requests
     NetworkLogs,
     /// Assert that an element contains specific text
