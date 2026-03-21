@@ -25,7 +25,6 @@ use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
 use serde_json::Value;
-use std::time::Duration;
 
 /// Executes a command.
 ///
@@ -53,7 +52,7 @@ pub async fn execute_command(config: Config) -> Result<()> {
 
     let page = browser.new_page(config.url.as_str()).await.context("Failed to navigate")?;
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let _ = page.wait_for_navigation().await;
 
     inject_console_capture(&page).await.context("Failed to inject console capture script")?;
 
@@ -80,11 +79,10 @@ pub async fn execute_command(config: Config) -> Result<()> {
         }
     };
 
-    if let Some(trace_dir) = &config.trace {
-        if let Err(e) = execute_trace(&page, trace_dir, &config, result.is_ok()).await {
+    if let Some(trace_dir) = &config.trace
+        && let Err(e) = execute_trace(&page, trace_dir, &config, result.is_ok()).await {
             eprintln!("Warning: Failed to execute trace: {e}");
         }
-    }
 
     let _ = browser.close().await;
 
@@ -263,7 +261,7 @@ async fn handle_eval_screenshot(page: &Page, command: &Commands) -> Result<Value
         }
         Commands::ScreenshotAnnotated { path } => {
             page.evaluate(generate_screenshot_annotated_js().as_str()).await?;
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            page.evaluate("await new Promise(r => requestAnimationFrame(r));").await?;
             let params = chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder().format(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png).build();
             let png = page.screenshot(params).await?;
             std::fs::write(path.clone(), png)?;
@@ -350,7 +348,8 @@ async fn handle_console_wait(page: &Page, command: &Commands) -> Result<Value> {
             Ok(serde_json::json!(selector))
         }
         Commands::WaitNav => {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            // Replaced sleep with CDP native network/frame loading wait
+            page.wait_for_navigation().await?;
             Ok(serde_json::json!("navigation complete"))
         }
         Commands::WaitHydration => {

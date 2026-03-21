@@ -730,5 +730,5 @@ pub fn calculate_pixel_diff(img1_buf: &[u8], img2_buf: &[u8]) -> Result<f64, Pix
         }
     }
 
-    Ok((diff_pixels as f64 / total_pixels as f64) * 100.0)
+    Ok((f64::from(diff_pixels) / f64::from(total_pixels)) * 100.0)
 }
