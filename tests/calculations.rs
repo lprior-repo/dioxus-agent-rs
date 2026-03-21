@@ -54,7 +54,7 @@ fn test_precondition_empty_selector_returns_error() {
         "http://localhost:8080",
         10,
         Commands::Click {
-            selector: "".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("".to_string()),
         },
     );
     let result = validate_inputs(&cli);
@@ -68,7 +68,7 @@ fn test_precondition_whitespace_selector_returns_error() {
         "http://localhost:8080",
         10,
         Commands::Click {
-            selector: "   ".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("   ".to_string()),
         },
     );
     let result = validate_inputs(&cli);
@@ -96,7 +96,7 @@ fn test_precondition_dangerous_js_returns_error() {
         "http://localhost:8080",
         10,
         Commands::Eval {
-            js: "eval(document.cookie)".to_string(),
+            js: dioxus_agent_rs::data::types::JsPayload("eval(document.cookie)".to_string()),
         },
     );
     let result = validate_inputs(&cli);
@@ -132,61 +132,61 @@ fn test_validate_all_commands_accept_valid_inputs() {
         Commands::Back,
         Commands::Forward,
         Commands::Click {
-            selector: "#btn".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("#btn".to_string()),
         },
         Commands::DoubleClick {
-            selector: ".item".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector(".item".to_string()),
         },
         Commands::RightClick {
-            selector: "a.link".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("a.link".to_string()),
         },
         Commands::Hover {
-            selector: "div.hover".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div.hover".to_string()),
         },
         Commands::Text {
-            selector: "input".to_string(),
-            value: "hello".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("input".to_string()),
+            value: dioxus_agent_rs::data::types::InputValue("hello".to_string()),
         },
         Commands::Clear {
-            selector: "input".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("input".to_string()),
         },
         Commands::Submit {
-            selector: "form".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("form".to_string()),
         },
         Commands::Select {
-            selector: "select".to_string(),
-            value: "opt1".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("select".to_string()),
+            value: dioxus_agent_rs::data::types::InputValue("opt1".to_string()),
         },
         Commands::Check {
-            selector: "input[type=checkbox]".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("input[type=checkbox]".to_string()),
         },
         Commands::Uncheck {
-            selector: "input[type=checkbox]".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("input[type=checkbox]".to_string()),
         },
         Commands::GetText {
-            selector: "p".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("p".to_string()),
         },
         Commands::Attr {
-            selector: "img".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("img".to_string()),
             attribute: "src".to_string(),
         },
         Commands::Classes {
-            selector: "div".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div".to_string()),
         },
         Commands::TagName {
-            selector: "span".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("span".to_string()),
         },
         Commands::Visible {
-            selector: "div".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div".to_string()),
         },
         Commands::Enabled {
-            selector: "input".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("input".to_string()),
         },
         Commands::Selected {
-            selector: "option".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("option".to_string()),
         },
         Commands::Scroll {
-            selector: "div".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div".to_string()),
         },
         Commands::ScrollBy { x: 0, y: 100 },
         Commands::Key {
@@ -196,30 +196,30 @@ fn test_validate_all_commands_accept_valid_inputs() {
             combo: "Control+c".to_string(),
         },
         Commands::Screenshot {
-            path: "/tmp/screen.png".to_string(),
+            path: dioxus_agent_rs::data::types::FilePath("/tmp/screen.png".to_string()),
         },
         Commands::ElementScreenshot {
-            selector: "div".to_string(),
-            path: "/tmp/el.png".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div".to_string()),
+            path: dioxus_agent_rs::data::types::FilePath("/tmp/el.png".to_string()),
         },
         Commands::Viewport {
             width: 1920,
             height: 1080,
         },
         Commands::InjectCss {
-            css: "body { color: red; }".to_string(),
+            css: dioxus_agent_rs::data::types::CssPayload("body { color: red; }".to_string()),
         },
         Commands::Style {
-            selector: "div".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div".to_string()),
             property: "color".to_string(),
         },
         Commands::Eval {
-            js: "document.title".to_string(),
+            js: dioxus_agent_rs::data::types::JsPayload("document.title".to_string()),
         },
         Commands::Cookies,
         Commands::SetCookie {
             name: "session".to_string(),
-            value: "abc123".to_string(),
+            value: dioxus_agent_rs::data::types::InputValue("abc123".to_string()),
             domain: None,
             path: None,
         },
@@ -227,22 +227,22 @@ fn test_validate_all_commands_accept_valid_inputs() {
             name: "session".to_string(),
         },
         Commands::LocalGet {
-            key: "user".to_string(),
+            key: dioxus_agent_rs::data::types::StorageKey("user".to_string()),
         },
         Commands::LocalSet {
-            key: "user".to_string(),
-            value: "john".to_string(),
+            key: dioxus_agent_rs::data::types::StorageKey("user".to_string()),
+            value: dioxus_agent_rs::data::types::InputValue("john".to_string()),
         },
         Commands::LocalRemove {
-            key: "user".to_string(),
+            key: dioxus_agent_rs::data::types::StorageKey("user".to_string()),
         },
         Commands::LocalClear,
         Commands::SessionGet {
-            key: "token".to_string(),
+            key: dioxus_agent_rs::data::types::StorageKey("token".to_string()),
         },
         Commands::SessionSet {
-            key: "token".to_string(),
-            value: "xyz".to_string(),
+            key: dioxus_agent_rs::data::types::StorageKey("token".to_string()),
+            value: dioxus_agent_rs::data::types::InputValue("xyz".to_string()),
         },
         Commands::SessionClear,
         Commands::Console,
@@ -250,25 +250,25 @@ fn test_validate_all_commands_accept_valid_inputs() {
             r#type: "log".to_string(),
         },
         Commands::Wait {
-            selector: "#loading".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("#loading".to_string()),
         },
         Commands::WaitGone {
-            selector: "#loading".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("#loading".to_string()),
         },
         Commands::WaitNav,
         Commands::WaitHydration,
         Commands::DioxusState,
         Commands::DioxusClick {
-            target: "123".to_string(),
+            target: dioxus_agent_rs::data::types::Selector("123".to_string()),
         },
         Commands::Count {
-            selector: "li".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("li".to_string()),
         },
         Commands::FindAll {
-            selector: "div".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("div".to_string()),
         },
         Commands::Exists {
-            selector: "#app".to_string(),
+            selector: dioxus_agent_rs::data::types::Selector("#app".to_string()),
         },
     ];
 

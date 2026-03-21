@@ -8,6 +8,8 @@
 //! Data layer - types, enums, configuration
 //! Pure data structures with no logic
 
+pub mod types;
+
 use clap::{Parser, Subcommand};
 use std::time::Duration;
 use url::Url;
@@ -70,86 +72,86 @@ pub enum Commands {
 
     // ============ Element Interaction ============
     Click {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     DoubleClick {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     RightClick {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Hover {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Text {
-        selector: String,
-        value: String,
+        selector: crate::data::types::Selector,
+        value: crate::data::types::InputValue,
     },
     Clear {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Submit {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Select {
-        selector: String,
-        value: String,
+        selector: crate::data::types::Selector,
+        value: crate::data::types::InputValue,
     },
     Check {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Uncheck {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
 
     // ============ Element Queries ============
     GetText {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Attr {
-        selector: String,
+        selector: crate::data::types::Selector,
         attribute: String,
     },
     Classes {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     TagName {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Visible {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Enabled {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Selected {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Count {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     FindAll {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     Exists {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
 
     // ============ JavaScript & Execution ============
     Eval {
-        js: String,
+        js: crate::data::types::JsPayload,
     },
     InjectCss {
-        css: String,
+        css: crate::data::types::CssPayload,
     },
 
     // ============ Screenshot ============
     Screenshot {
-        path: String,
+        path: crate::data::types::FilePath,
     },
     ElementScreenshot {
-        selector: String,
-        path: String,
+        selector: crate::data::types::Selector,
+        path: crate::data::types::FilePath,
     },
 
     // ============ Viewport & Scrolling ============
@@ -158,7 +160,7 @@ pub enum Commands {
         height: u32,
     },
     Scroll {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     ScrollBy {
         x: i32,
@@ -177,7 +179,7 @@ pub enum Commands {
     Cookies,
     SetCookie {
         name: String,
-        value: String,
+        value: crate::data::types::InputValue,
         domain: Option<String>,
         path: Option<String>,
     },
@@ -185,22 +187,22 @@ pub enum Commands {
         name: String,
     },
     LocalGet {
-        key: String,
+        key: crate::data::types::StorageKey,
     },
     LocalSet {
-        key: String,
-        value: String,
+        key: crate::data::types::StorageKey,
+        value: crate::data::types::InputValue,
     },
     LocalRemove {
-        key: String,
+        key: crate::data::types::StorageKey,
     },
     LocalClear,
     SessionGet {
-        key: String,
+        key: crate::data::types::StorageKey,
     },
     SessionSet {
-        key: String,
-        value: String,
+        key: crate::data::types::StorageKey,
+        value: crate::data::types::InputValue,
     },
     SessionClear,
 
@@ -213,10 +215,10 @@ pub enum Commands {
 
     // ============ Waiting ============
     Wait {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     WaitGone {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     WaitNav,
     WaitHydration,
@@ -224,41 +226,41 @@ pub enum Commands {
     // ============ Dioxus-Specific ============
     DioxusState,
     DioxusClick {
-        target: String,
+        target: crate::data::types::Selector,
     },
     SemanticTree,
 
     // ============ AI Agent Extended ============
     Upload {
-        selector: String,
-        path: String,
+        selector: crate::data::types::Selector,
+        path: crate::data::types::FilePath,
     },
     FillForm {
         json_data: String,
     },
     NetworkLogs,
     AssertText {
-        selector: String,
-        expected: String,
+        selector: crate::data::types::Selector,
+        expected: crate::data::types::ExpectedText,
     },
     AssertVisible {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     AssertExists {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
 
     // ============ AI Agent Advanced Capabilities ============
     FuzzyClick {
-        text: String,
+        text: crate::data::types::ExpectedText,
     },
     WaitNetworkIdle,
     ScrollToText {
-        container: String,
-        text: String,
+        container: crate::data::types::Selector,
+        text: crate::data::types::ExpectedText,
     },
     ExtractTable {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
 
     // ============ "God-Tier" Playwright Features ============
@@ -269,31 +271,31 @@ pub enum Commands {
         status: u16,
     },
     ShadowClick {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     DragAndDrop {
-        source: String,
-        target: String,
+        source: crate::data::types::Selector,
+        target: crate::data::types::Selector,
     },
     ExportState {
-        path: String,
+        path: crate::data::types::FilePath,
     },
     ImportState {
-        path: String,
+        path: crate::data::types::FilePath,
     },
     /// Wait for an element to become visible, enabled, and stop animating
     WaitStable {
-        selector: String,
+        selector: crate::data::types::Selector,
     },
     /// Compare a screenshot against a baseline image (Visual Regression)
     AssertScreenshot {
         /// The CSS selector (or leave empty for full page)
         #[arg(short, long)]
-        selector: Option<String>,
+        selector: Option<crate::data::types::Selector>,
         /// Path to the baseline image
-        baseline: String,
+        baseline: crate::data::types::FilePath,
         /// Path to save the current screenshot if it fails
-        failure_path: String,
+        failure_path: crate::data::types::FilePath,
         /// Allowed percentage of pixel difference (0.0 to 100.0)
         #[arg(default_value = "1.0")]
         tolerance: f64,
@@ -301,12 +303,12 @@ pub enum Commands {
 
     // ============ Style & Interactive ============
     Style {
-        selector: String,
+        selector: crate::data::types::Selector,
         property: String,
     },
     Repl,
     ScreenshotAnnotated {
-        path: String,
+        path: crate::data::types::FilePath,
     },
 }
 
