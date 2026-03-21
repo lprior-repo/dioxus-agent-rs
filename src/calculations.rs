@@ -15,8 +15,6 @@ use url::Url;
 pub enum ValidationError {
     #[error("Invalid target URL: {0}")]
     InvalidUrl(url::ParseError),
-    #[error("Invalid WebDriver URL: {0}")]
-    InvalidWebDriverUrl(url::ParseError),
     #[error("Timeout must be greater than 0")]
     ZeroTimeout,
     #[error("{0} cannot be empty or whitespace")]
@@ -42,9 +40,6 @@ pub enum ValidationError {
 /// Returns `ValidationError` if the URL is invalid, timeout is zero, or if the command validation fails.
 pub fn validate_inputs(cli: &Cli) -> Result<Config, ValidationError> {
     let url = Url::parse(&cli.url).map_err(ValidationError::InvalidUrl)?;
-    let webdriver_url =
-        Url::parse(&cli.webdriver_url).map_err(ValidationError::InvalidWebDriverUrl)?;
-
     if cli.timeout == 0 {
         return Err(ValidationError::ZeroTimeout);
     }
@@ -72,7 +67,6 @@ pub fn validate_inputs(cli: &Cli) -> Result<Config, ValidationError> {
     Ok(Config {
         url,
         timeout: Duration::from_secs(cli.timeout),
-        webdriver_url,
         mode,
         output,
         wait,
@@ -362,13 +356,7 @@ pub fn generate_css_injection_js(css: &str) -> String {
     )
 }
 
-#[must_use]
-pub fn generate_element_screenshot_js(selector: &str) -> String {
-    format!(
-        r"const el = document.querySelector('{}'); if (!el) return null; const rect = el.getBoundingClientRect(); return {{ x: rect.x, y: rect.y, width: rect.width, height: rect.height }};",
-        escape_js_string(selector)
-    )
-}
+
 
 #[must_use]
 pub fn generate_dioxus_click_js(target: &str) -> String {

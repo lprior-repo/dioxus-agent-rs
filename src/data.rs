@@ -25,10 +25,6 @@ pub struct Cli {
     #[arg(short, long, default_value = "10")]
     pub timeout: u64,
 
-    /// `WebDriver` URL
-    #[arg(long, default_value = "http://localhost:4444")]
-    pub webdriver_url: String,
-
     /// Run the browser in headed mode (visible)
     #[arg(long)]
     pub no_headless: bool,
@@ -49,101 +45,236 @@ pub struct Cli {
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
     // ============ Navigation Commands ============
-    Dom, Title, Url, Refresh, Back, Forward,
+    Dom,
+    Title,
+    Url,
+    Refresh,
+    Back,
+    Forward,
 
     // ============ Element Interaction ============
-    Click { selector: String },
-    DoubleClick { selector: String },
-    RightClick { selector: String },
-    Hover { selector: String },
-    Text { selector: String, value: String },
-    Clear { selector: String },
-    Submit { selector: String },
-    Select { selector: String, value: String },
-    Check { selector: String },
-    Uncheck { selector: String },
+    Click {
+        selector: String,
+    },
+    DoubleClick {
+        selector: String,
+    },
+    RightClick {
+        selector: String,
+    },
+    Hover {
+        selector: String,
+    },
+    Text {
+        selector: String,
+        value: String,
+    },
+    Clear {
+        selector: String,
+    },
+    Submit {
+        selector: String,
+    },
+    Select {
+        selector: String,
+        value: String,
+    },
+    Check {
+        selector: String,
+    },
+    Uncheck {
+        selector: String,
+    },
 
     // ============ Element Queries ============
-    GetText { selector: String },
-    Attr { selector: String, attribute: String },
-    Classes { selector: String },
-    TagName { selector: String },
-    Visible { selector: String },
-    Enabled { selector: String },
-    Selected { selector: String },
-    Count { selector: String },
-    FindAll { selector: String },
-    Exists { selector: String },
+    GetText {
+        selector: String,
+    },
+    Attr {
+        selector: String,
+        attribute: String,
+    },
+    Classes {
+        selector: String,
+    },
+    TagName {
+        selector: String,
+    },
+    Visible {
+        selector: String,
+    },
+    Enabled {
+        selector: String,
+    },
+    Selected {
+        selector: String,
+    },
+    Count {
+        selector: String,
+    },
+    FindAll {
+        selector: String,
+    },
+    Exists {
+        selector: String,
+    },
 
     // ============ JavaScript & Execution ============
-    Eval { js: String },
-    InjectCss { css: String },
+    Eval {
+        js: String,
+    },
+    InjectCss {
+        css: String,
+    },
 
     // ============ Screenshot ============
-    Screenshot { path: String },
-    ElementScreenshot { selector: String, path: String },
+    Screenshot {
+        path: String,
+    },
+    ElementScreenshot {
+        selector: String,
+        path: String,
+    },
 
     // ============ Viewport & Scrolling ============
-    Viewport { width: u32, height: u32 },
-    Scroll { selector: String },
-    ScrollBy { x: i32, y: i32 },
+    Viewport {
+        width: u32,
+        height: u32,
+    },
+    Scroll {
+        selector: String,
+    },
+    ScrollBy {
+        x: i32,
+        y: i32,
+    },
 
     // ============ Keyboard ============
-    Key { key: String },
-    KeyCombo { combo: String },
+    Key {
+        key: String,
+    },
+    KeyCombo {
+        combo: String,
+    },
 
     // ============ Storage ============
     Cookies,
-    SetCookie { name: String, value: String, domain: Option<String>, path: Option<String> },
-    DeleteCookie { name: String },
-    LocalGet { key: String },
-    LocalSet { key: String, value: String },
-    LocalRemove { key: String },
+    SetCookie {
+        name: String,
+        value: String,
+        domain: Option<String>,
+        path: Option<String>,
+    },
+    DeleteCookie {
+        name: String,
+    },
+    LocalGet {
+        key: String,
+    },
+    LocalSet {
+        key: String,
+        value: String,
+    },
+    LocalRemove {
+        key: String,
+    },
     LocalClear,
-    SessionGet { key: String },
-    SessionSet { key: String, value: String },
+    SessionGet {
+        key: String,
+    },
+    SessionSet {
+        key: String,
+        value: String,
+    },
     SessionClear,
 
     // ============ Console ============
     Console,
-    ConsoleLog { #[arg(default_value = "log")] r#type: String },
+    ConsoleLog {
+        #[arg(default_value = "log")]
+        r#type: String,
+    },
 
     // ============ Waiting ============
-    Wait { selector: String },
-    WaitGone { selector: String },
+    Wait {
+        selector: String,
+    },
+    WaitGone {
+        selector: String,
+    },
     WaitNav,
     WaitHydration,
 
     // ============ Dioxus-Specific ============
     DioxusState,
-    DioxusClick { target: String },
+    DioxusClick {
+        target: String,
+    },
     SemanticTree,
 
     // ============ AI Agent Extended ============
-    Upload { selector: String, path: String },
-    FillForm { json_data: String },
+    Upload {
+        selector: String,
+        path: String,
+    },
+    FillForm {
+        json_data: String,
+    },
     NetworkLogs,
-    AssertText { selector: String, expected: String },
-    AssertVisible { selector: String },
-    AssertExists { selector: String },
+    AssertText {
+        selector: String,
+        expected: String,
+    },
+    AssertVisible {
+        selector: String,
+    },
+    AssertExists {
+        selector: String,
+    },
 
     // ============ AI Agent Advanced Capabilities ============
-    FuzzyClick { text: String },
+    FuzzyClick {
+        text: String,
+    },
     WaitNetworkIdle,
-    ScrollToText { container: String, text: String },
-    ExtractTable { selector: String },
+    ScrollToText {
+        container: String,
+        text: String,
+    },
+    ExtractTable {
+        selector: String,
+    },
 
     // ============ "God-Tier" Playwright Features ============
-    MockRoute { url_pattern: String, response_json: String, #[arg(default_value = "200")] status: u16 },
-    ShadowClick { selector: String },
-    DragAndDrop { source: String, target: String },
-    ExportState { path: String },
-    ImportState { path: String },
+    MockRoute {
+        url_pattern: String,
+        response_json: String,
+        #[arg(default_value = "200")]
+        status: u16,
+    },
+    ShadowClick {
+        selector: String,
+    },
+    DragAndDrop {
+        source: String,
+        target: String,
+    },
+    ExportState {
+        path: String,
+    },
+    ImportState {
+        path: String,
+    },
 
     // ============ Style & Interactive ============
-    Style { selector: String, property: String },
+    Style {
+        selector: String,
+        property: String,
+    },
     Repl,
-    ScreenshotAnnotated { path: String },
+    ScreenshotAnnotated {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +300,6 @@ pub enum WaitStrategy {
 pub struct Config {
     pub url: Url,
     pub timeout: Duration,
-    pub webdriver_url: Url,
     pub mode: BrowserMode,
     pub output: OutputFormat,
     pub wait: WaitStrategy,

@@ -4,9 +4,9 @@
 
 use dioxus_agent_rs::calculations::{
     escape_js_string, generate_computed_style_js, generate_console_js, generate_css_injection_js,
-    generate_dioxus_click_js, generate_dioxus_state_js, generate_element_screenshot_js,
-    generate_hydration_wait_js, generate_keycombo_js, generate_keypress_js, generate_storage_js,
-    generate_wait_element_js, generate_wait_gone_js, validate_inputs,
+    generate_dioxus_click_js, generate_dioxus_state_js, generate_hydration_wait_js,
+    generate_keycombo_js, generate_keypress_js, generate_storage_js, generate_wait_element_js,
+    generate_wait_gone_js, validate_inputs,
 };
 
 use dioxus_agent_rs::data::{Cli, Commands};
@@ -15,7 +15,6 @@ fn make_cli(url: &str, timeout: u64, cmd: Commands) -> Cli {
     Cli {
         url: url.to_string(),
         timeout,
-        webdriver_url: "http://localhost:4444".to_string(),
         no_headless: false,
         json: false,
         auto_wait: false,
@@ -40,7 +39,11 @@ fn test_precondition_zero_timeout_returns_error() {
     let cli = make_cli("http://localhost:8080", 0, Commands::Dom);
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().to_lowercase().contains("timeout"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .to_lowercase()
+        .contains("timeout"));
 }
 
 #[test]
@@ -388,13 +391,6 @@ fn test_css_injection() {
     assert!(js.contains("createElement"));
     assert!(js.contains("style"));
     assert!(js.contains("head"));
-}
-
-#[test]
-fn test_element_screenshot_js() {
-    let js = generate_element_screenshot_js("#screenshot");
-    assert!(js.contains("querySelector"));
-    assert!(js.contains("getBoundingClientRect"));
 }
 
 #[test]
