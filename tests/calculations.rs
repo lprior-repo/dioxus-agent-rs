@@ -16,6 +16,10 @@ fn make_cli(url: &str, timeout: u64, cmd: Commands) -> Cli {
     Cli {
         url: url.to_string(),
         timeout,
+        webdriver_url: "http://localhost:4444".to_string(),
+        no_headless: false,
+        json: false,
+        auto_wait: false,
         command: cmd,
     }
 }
