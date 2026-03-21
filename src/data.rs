@@ -374,6 +374,40 @@ pub enum Commands {
         selector: String,
     },
 
+    // ============ "God-Tier" Playwright Features ============
+    /// Mock a network route to return a fake JSON response
+    MockRoute {
+        /// The URL pattern to match (e.g. "api/users")
+        url_pattern: String,
+        /// The fake JSON response to return
+        response_json: String,
+        /// The HTTP status code
+        #[arg(default_value = "200")]
+        status: u16,
+    },
+    /// Deep click an element inside a Shadow DOM using ">>" combinator syntax
+    ShadowClick {
+        /// The shadow DOM selector (e.g. "my-component >> .internal-btn")
+        selector: String,
+    },
+    /// Synthetically perform drag and drop between two elements
+    DragAndDrop {
+        /// The CSS selector of the element to drag
+        source: String,
+        /// The CSS selector of the drop target
+        target: String,
+    },
+    /// Export all browser state (cookies, localStorage) to a JSON file
+    ExportState {
+        /// The file path to save the state to
+        path: String,
+    },
+    /// Import browser state from a JSON file
+    ImportState {
+        /// The file path to load the state from
+        path: String,
+    },
+
     // ============ Style ============
     /// Get computed style property
     Style {

@@ -189,6 +189,7 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
     let js = "
         window.__captured_logs = [];
         window.__captured_network = [];
+        window.__mock_routes = window.__mock_routes || [];
         ['log', 'warn', 'error', 'info', 'debug'].forEach(type => {
             window['__captured_' + type] = [];
             const original = console[type];
@@ -196,6 +197,32 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
                 window['__captured_' + type].push(args.map(a => String(a)));
                 original.apply(console, args);
             };
+        });
+        const originalFetch = window.fetch;
+        window.__active_requests = 0;
+        window.fetch = async function(...args) {
+            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || 'unknown';
+            
+            for (const route of window.__mock_routes) {
+                if (url.includes(route.pattern)) {
+                    return new Response(route.response, {
+                        status: route.status,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+            }
+
+            window.__active_requests++;
+            window.__captured_network.push({ type: 'fetch', url: url });
+            try {
+                const response = await originalFetch.apply(this, args);
+                window.__active_requests--;
+                return response;
+            } catch (error) {
+                window.__active_requests--;
+                throw error;
+            }
+        };
         });
         const originalFetch = window.fetch;
         window.fetch = async function(...args) {
@@ -735,7 +762,10 @@ async fn execute_command_internal(
         }
         Commands::FuzzyClick { text } => {
             let js = generate_fuzzy_click_js(text);
-            let result: Value = client.execute(&js, vec![]).await.context("FuzzyClick execution failed")?;
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("FuzzyClick execution failed")?;
             if result.is_null() {
                 anyhow::bail!("FuzzyClick could not find interactable element with text: {text}");
             }
@@ -743,7 +773,10 @@ async fn execute_command_internal(
         }
         Commands::WaitNetworkIdle => {
             let js = generate_network_idle_js();
-            let result: Value = client.execute(&js, vec![]).await.context("WaitNetworkIdle execution failed")?;
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("WaitNetworkIdle execution failed")?;
             if result.as_bool() == Some(true) {
                 Ok(serde_json::json!("Network idle"))
             } else {
@@ -752,7 +785,10 @@ async fn execute_command_internal(
         }
         Commands::ScrollToText { container, text } => {
             let js = generate_scroll_to_text_js(container, text);
-            let result: Value = client.execute(&js, vec![]).await.context("ScrollToText execution failed")?;
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("ScrollToText execution failed")?;
             if result.is_null() {
                 anyhow::bail!("ScrollToText container not found: {container}");
             }
@@ -764,7 +800,10 @@ async fn execute_command_internal(
         }
         Commands::ExtractTable { selector } => {
             let js = generate_extract_table_js(selector);
-            let result: Value = client.execute(&js, vec![]).await.context("ExtractTable execution failed")?;
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("ExtractTable execution failed")?;
             if result.is_null() {
                 anyhow::bail!("ExtractTable target not found or has no headers: {selector}");
             }
@@ -818,6 +857,160 @@ async fn execute_command_internal(
             } else {
                 anyhow::bail!("Existence assertion failed for: {selector}");
             }
+        }
+
+        // ============ God-Tier Playwright Features ============
+        Commands::MockRoute {
+            url_pattern,
+            response_json,
+            status,
+        } => {
+            let js = format!(
+                "window.__mock_routes = window.__mock_routes || []; \
+                 window.__mock_routes.push({{ pattern: '{}', response: '{}', status: {} }}); \
+                 return true;",
+                url_pattern.replace('\'', "\\'"),
+                response_json.replace('\'', "\\'").replace('\n', " "),
+                status
+            );
+            client
+                .execute(&js, vec![])
+                .await
+                .context("MockRoute execution failed")?;
+            Ok(serde_json::json!(url_pattern))
+        }
+        Commands::ShadowClick { selector } => {
+            let parts: Vec<&str> = selector.split(">>").map(str::trim).collect();
+            let parts_json = serde_json::to_string(&parts)?;
+            let js = format!(
+                "
+                const selectors = {parts_json};
+                let current = document;
+                for (let i = 0; i < selectors.length; i++) {{
+                    if (current.shadowRoot) current = current.shadowRoot;
+                    current = current.querySelector(selectors[i]);
+                    if (!current) return false;
+                }}
+                current.click();
+                return true;
+            "
+            );
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("ShadowClick execution failed")?;
+            if result.as_bool() == Some(true) {
+                Ok(serde_json::json!(selector))
+            } else {
+                anyhow::bail!("Shadow element not found: {selector}");
+            }
+        }
+        Commands::DragAndDrop { source, target } => {
+            let js = format!(
+                "
+                const source = document.querySelector('{}');
+                const target = document.querySelector('{}');
+                if (!source || !target) return false;
+                
+                const dataTransfer = new DataTransfer();
+                
+                source.dispatchEvent(new DragEvent('dragstart', {{ dataTransfer, bubbles: true }}));
+                target.dispatchEvent(new DragEvent('dragenter', {{ dataTransfer, bubbles: true }}));
+                target.dispatchEvent(new DragEvent('dragover',  {{ dataTransfer, bubbles: true }}));
+                target.dispatchEvent(new DragEvent('drop',      {{ dataTransfer, bubbles: true }}));
+                source.dispatchEvent(new DragEvent('dragend',   {{ dataTransfer, bubbles: true }}));
+                
+                return true;
+            ",
+                source.replace('\'', "\\'"),
+                target.replace('\'', "\\'")
+            );
+            let result: Value = client
+                .execute(&js, vec![])
+                .await
+                .context("DragAndDrop execution failed")?;
+            if result.as_bool() == Some(true) {
+                Ok(serde_json::json!(true))
+            } else {
+                anyhow::bail!("Drag and drop failed, could not find source or target");
+            }
+        }
+        Commands::ExportState { path } => {
+            let js = "
+                return {
+                    localStorage: Object.assign({}, window.localStorage),
+                    sessionStorage: Object.assign({}, window.sessionStorage)
+                };
+            ";
+            let storage: Value = client
+                .execute(js, vec![])
+                .await
+                .context("Failed to get storage state")?;
+            let cookies = client
+                .get_all_cookies()
+                .await
+                .context("Failed to get cookies")?;
+
+            let state = serde_json::json!({
+                "storage": storage,
+                "cookies": cookies.iter().map(|c| {
+                    serde_json::json!({
+                        "name": c.name(),
+                        "value": c.value(),
+                        "domain": c.domain(),
+                        "path": c.path()
+                    })
+                }).collect::<Vec<_>>()
+            });
+
+            std::fs::write(path, serde_json::to_string_pretty(&state)?)
+                .context("Failed to write state file")?;
+            Ok(serde_json::json!(path))
+        }
+        Commands::ImportState { path } => {
+            let content = std::fs::read_to_string(path).context("Failed to read state file")?;
+            let state: Value =
+                serde_json::from_str(&content).context("Failed to parse state file")?;
+
+            if let Some(storage) = state.get("storage") {
+                if let Some(ls) = storage.get("localStorage").and_then(|v| v.as_object()) {
+                    for (k, v) in ls {
+                        if let Some(v_str) = v.as_str() {
+                            let js = format!(
+                                "localStorage.setItem('{}', '{}');",
+                                k.replace('\'', "\\'"),
+                                v_str.replace('\'', "\\'")
+                            );
+                            let _ = client.execute(&js, vec![]).await;
+                        }
+                    }
+                }
+                if let Some(ss) = storage.get("sessionStorage").and_then(|v| v.as_object()) {
+                    for (k, v) in ss {
+                        if let Some(v_str) = v.as_str() {
+                            let js = format!(
+                                "sessionStorage.setItem('{}', '{}');",
+                                k.replace('\'', "\\'"),
+                                v_str.replace('\'', "\\'")
+                            );
+                            let _ = client.execute(&js, vec![]).await;
+                        }
+                    }
+                }
+            }
+            if let Some(cookies) = state.get("cookies").and_then(|v| v.as_array()) {
+                for c in cookies {
+                    if let (Some(name), Some(value)) = (
+                        c.get("name").and_then(|v| v.as_str()),
+                        c.get("value").and_then(|v| v.as_str()),
+                    ) {
+                        let js = format!("document.cookie = '{name}={value}'; return true;");
+                        let _ = client.execute(&js, vec![]).await;
+                    }
+                }
+            }
+
+            Ok(serde_json::json!(path))
         }
 
         // ============ Style ============

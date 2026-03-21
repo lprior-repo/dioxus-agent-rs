@@ -86,6 +86,24 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         }
         Commands::ExtractTable { selector } => validate_non_empty_selector(selector),
 
+        // ============ "God-Tier" Playwright Features ============
+        Commands::MockRoute {
+            url_pattern,
+            response_json,
+            status: _,
+        } => {
+            validate_non_empty(url_pattern, "url_pattern")?;
+            validate_non_empty(response_json, "response_json")
+        }
+        Commands::ShadowClick { selector } => validate_non_empty_selector(selector),
+        Commands::DragAndDrop { source, target } => {
+            validate_non_empty_selector(source)?;
+            validate_non_empty_selector(target)
+        }
+        Commands::ExportState { path } | Commands::ImportState { path } => {
+            validate_non_empty(path, "path")
+        }
+
         // Commands with json
         Commands::FillForm { json_data } => {
             if json_data.trim().is_empty() {
@@ -208,7 +226,6 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         | Commands::SessionClear
         | Commands::Console
         | Commands::NetworkLogs
-        | Commands::WaitNetworkIdle
         | Commands::Wait { .. }
         | Commands::WaitGone { .. }
         | Commands::WaitNav
