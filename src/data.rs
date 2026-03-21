@@ -37,6 +37,10 @@ pub struct Cli {
     #[arg(long)]
     pub auto_wait: bool,
 
+    /// Enable AI execution tracing by providing a directory path to save the trace to
+    #[arg(long)]
+    pub trace: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -265,6 +269,23 @@ pub enum Commands {
     ImportState {
         path: String,
     },
+    /// Wait for an element to become visible, enabled, and stop animating
+    WaitStable {
+        selector: String,
+    },
+    /// Compare a screenshot against a baseline image (Visual Regression)
+    AssertScreenshot {
+        /// The CSS selector (or leave empty for full page)
+        #[arg(short, long)]
+        selector: Option<String>,
+        /// Path to the baseline image
+        baseline: String,
+        /// Path to save the current screenshot if it fails
+        failure_path: String,
+        /// Allowed percentage of pixel difference (0.0 to 100.0)
+        #[arg(default_value = "1.0")]
+        tolerance: f64,
+    },
 
     // ============ Style & Interactive ============
     Style {
@@ -303,6 +324,7 @@ pub struct Config {
     pub mode: BrowserMode,
     pub output: OutputFormat,
     pub wait: WaitStrategy,
+    pub trace: Option<String>,
     pub command: Commands,
 }
 

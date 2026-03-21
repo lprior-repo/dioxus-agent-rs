@@ -70,6 +70,7 @@ pub fn validate_inputs(cli: &Cli) -> Result<Config, ValidationError> {
         mode,
         output,
         wait,
+        trace: cli.trace.clone(),
         command: cli.command.clone(),
     })
 }
@@ -176,6 +177,19 @@ fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
         | Commands::ScreenshotAnnotated { path }
         | Commands::ExportState { path }
         | Commands::ImportState { path } => validate_path(path),
+
+        Commands::AssertScreenshot {
+            selector,
+            baseline,
+            failure_path,
+            tolerance: _,
+        } => {
+            if let Some(s) = selector {
+                validate_selector(s)?;
+            }
+            validate_path(baseline)?;
+            validate_path(failure_path)
+        }
 
         // Other simple validations
         Commands::Viewport { width, height } => {
@@ -356,8 +370,6 @@ pub fn generate_css_injection_js(css: &str) -> String {
     )
 }
 
-
-
 #[must_use]
 pub fn generate_dioxus_click_js(target: &str) -> String {
     format!(
@@ -489,6 +501,34 @@ pub fn generate_wait_element_js(selector: &str) -> String {
             }});
             observer.observe(document.body, {{ childList: true, subtree: true }});
         }});",
+    )
+}
+
+#[must_use]
+pub fn generate_wait_stable_js(selector: &str) -> String {
+    let escaped = escape_js_string(selector);
+    format!(
+        r"return new Promise((resolve) => {{
+            const checkStable = async () => {{
+                const el = document.querySelector('{escaped}');
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                const rect1 = el.getBoundingClientRect();
+                await new Promise(r => requestAnimationFrame(r));
+                await new Promise(r => requestAnimationFrame(r));
+                const rect2 = el.getBoundingClientRect();
+                return rect1.x === rect2.x && rect1.y === rect2.y && rect1.width === rect2.width && rect1.height === rect2.height;
+            }};
+            const run = async () => {{
+                for (let i = 0; i < 50; i++) {{
+                    if (await checkStable()) {{ resolve(true); return; }}
+                    await new Promise(r => setTimeout(r, 100));
+                }}
+                resolve(false);
+            }};
+            run();
+        }});"
     )
 }
 

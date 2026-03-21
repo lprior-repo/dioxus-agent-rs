@@ -18,6 +18,7 @@ fn make_cli(url: &str, timeout: u64, cmd: Commands) -> Cli {
         no_headless: false,
         json: false,
         auto_wait: false,
+        trace: None,
         command: cmd,
     }
 }

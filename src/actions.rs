@@ -17,7 +17,7 @@ use crate::calculations::{
     generate_extract_table_js, generate_fuzzy_click_js, generate_hydration_wait_js,
     generate_keycombo_js, generate_keypress_js, generate_network_idle_js,
     generate_screenshot_annotated_js, generate_scroll_to_text_js, generate_semantic_tree_js,
-    generate_storage_js, generate_wait_element_js, generate_wait_gone_js,
+    generate_storage_js, generate_wait_element_js, generate_wait_gone_js, generate_wait_stable_js,
 };
 use crate::data::{BrowserMode, Commands, Config, OutputFormat, WaitStrategy};
 use anyhow::{Context, Result};
@@ -79,6 +79,35 @@ pub async fn execute_command(config: Config) -> Result<()> {
             )),
         }
     };
+
+    if let Some(trace_dir) = &config.trace {
+        let _ = std::fs::create_dir_all(trace_dir);
+        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+        
+        let trace_file = format!("{trace_dir}/{timestamp}-trace.json");
+        let png_file = format!("{trace_dir}/{timestamp}-screenshot.png");
+        let tree_file = format!("{trace_dir}/{timestamp}-semantic.txt");
+        
+        let params = chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder().format(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png).build();
+        if let Ok(png) = page.screenshot(params).await {
+            let _ = std::fs::write(&png_file, png);
+        }
+        
+        if let Ok(tree) = page.evaluate(generate_semantic_tree_js().as_str()).await
+            && let Ok(tree_str) = tree.into_value::<String>() {
+                let _ = std::fs::write(&tree_file, tree_str);
+            }
+        
+        let trace_data = serde_json::json!({
+            "command": format!("{:?}", config.command),
+            "url": config.url.as_str(),
+            "timestamp": timestamp,
+            "success": result.is_ok(),
+            "screenshot": png_file,
+            "semantic_tree": tree_file,
+        });
+        let _ = std::fs::write(trace_file, serde_json::to_string_pretty(&trace_data).unwrap_or_default());
+    }
 
     let _ = browser.close().await;
 
@@ -223,9 +252,9 @@ async fn dispatch_command(page: &Page, command: &Commands) -> Result<Value> {
         Commands::Click { .. } | Commands::DoubleClick { .. } | Commands::RightClick { .. } | Commands::Hover { .. } | Commands::Text { .. } | Commands::Clear { .. } | Commands::Submit { .. } | Commands::Select { .. } | Commands::Check { .. } | Commands::Uncheck { .. } => handle_interaction(page, command).await,
         Commands::GetText { .. } | Commands::Attr { .. } | Commands::Classes { .. } | Commands::TagName { .. } | Commands::Visible { .. } | Commands::Enabled { .. } | Commands::Selected { .. } | Commands::Count { .. } | Commands::FindAll { .. } | Commands::Exists { .. } => handle_queries(page, command).await,
         Commands::Cookies | Commands::SetCookie { .. } | Commands::DeleteCookie { .. } | Commands::LocalGet { .. } | Commands::LocalSet { .. } | Commands::LocalRemove { .. } | Commands::LocalClear | Commands::SessionGet { .. } | Commands::SessionSet { .. } | Commands::SessionClear => handle_storage(page, command).await,
-        Commands::Eval { .. } | Commands::InjectCss { .. } | Commands::Screenshot { .. } | Commands::ElementScreenshot { .. } | Commands::ScreenshotAnnotated { .. } => handle_eval_screenshot(page, command).await,
+        Commands::Eval { .. } | Commands::InjectCss { .. } | Commands::Screenshot { .. } | Commands::ElementScreenshot { .. } | Commands::ScreenshotAnnotated { .. } | Commands::AssertScreenshot { .. } => handle_eval_screenshot(page, command).await,
         Commands::Viewport { .. } | Commands::Scroll { .. } | Commands::ScrollBy { .. } | Commands::Key { .. } | Commands::KeyCombo { .. } => handle_viewport_keyboard(page, command).await,
-        Commands::Console | Commands::ConsoleLog { .. } | Commands::Wait { .. } | Commands::WaitGone { .. } | Commands::WaitNav | Commands::WaitHydration => handle_console_wait(page, command).await,
+        Commands::Console | Commands::ConsoleLog { .. } | Commands::Wait { .. } | Commands::WaitGone { .. } | Commands::WaitNav | Commands::WaitHydration | Commands::WaitStable { .. } => handle_console_wait(page, command).await,
         Commands::DioxusState | Commands::DioxusClick { .. } | Commands::SemanticTree | Commands::Style { .. } => handle_dioxus_style(page, command).await,
         Commands::Upload { .. } | Commands::FillForm { .. } | Commands::NetworkLogs | Commands::AssertText { .. } | Commands::AssertVisible { .. } | Commands::AssertExists { .. } | Commands::FuzzyClick { .. } | Commands::WaitNetworkIdle | Commands::ScrollToText { .. } | Commands::ExtractTable { .. } => handle_ai_extended(page, command).await,
         Commands::MockRoute { .. } | Commands::ShadowClick { .. } | Commands::DragAndDrop { .. } | Commands::ExportState { .. } | Commands::ImportState { .. } => handle_god_tier(page, command).await,
@@ -262,6 +291,51 @@ async fn handle_eval_screenshot(page: &Page, command: &Commands) -> Result<Value
             let png = page.screenshot(params).await?;
             std::fs::write(path.clone(), png)?;
             Ok(serde_json::json!(path))
+        }
+        Commands::AssertScreenshot { selector, baseline, failure_path, tolerance } => {
+            let buf = if let Some(sel) = selector {
+                let el = page.find_element(sel.as_str()).await?;
+                el.screenshot(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png).await?
+            } else {
+                let params = chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder().format(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png).build();
+                page.screenshot(params).await?
+            };
+            
+            if !std::path::Path::new(baseline).exists() {
+                std::fs::write(baseline, &buf)?;
+                return Ok(serde_json::json!("Baseline created"));
+            }
+            
+            let img1 = image::load_from_memory(&buf).context("Failed to load new screenshot")?;
+            let img2 = image::open(baseline).context("Failed to load baseline")?;
+            
+            if img1.width() != img2.width() || img1.height() != img2.height() {
+                std::fs::write(failure_path, buf)?;
+                anyhow::bail!("Dimensions mismatch. Baseline: {}x{}, New: {}x{}", img2.width(), img2.height(), img1.width(), img1.height());
+            }
+            
+            let img1_rgb = img1.to_rgb8();
+            let img2_rgb = img2.to_rgb8();
+            
+            let mut diff_pixels = 0;
+            let total_pixels = img1.width() * img1.height();
+            
+            for (p1, p2) in img1_rgb.pixels().zip(img2_rgb.pixels()) {
+                let r_diff = i32::from(p1[0]) - i32::from(p2[0]);
+                let g_diff = i32::from(p1[1]) - i32::from(p2[1]);
+                let b_diff = i32::from(p1[2]) - i32::from(p2[2]);
+                if r_diff.abs() + g_diff.abs() + b_diff.abs() > 10 {
+                    diff_pixels += 1;
+                }
+            }
+            
+            let percent_diff = (f64::from(diff_pixels) / f64::from(total_pixels)) * 100.0;
+            if percent_diff > *tolerance {
+                std::fs::write(failure_path, buf)?;
+                anyhow::bail!("Visual regression failed: {percent_diff:.2}% diff (tolerance: {tolerance:.2}%)");
+            }
+            
+            Ok(serde_json::json!(true))
         }
         _ => anyhow::bail!("Invalid eval/screenshot command"),
     }
@@ -326,6 +400,10 @@ async fn handle_console_wait(page: &Page, command: &Commands) -> Result<Value> {
         Commands::WaitHydration => {
             page.evaluate(generate_hydration_wait_js().as_str()).await?;
             Ok(serde_json::json!("hydrated"))
+        }
+        Commands::WaitStable { selector } => {
+            page.evaluate(generate_wait_stable_js(selector).as_str()).await?;
+            Ok(serde_json::json!(selector))
         }
         _ => anyhow::bail!("Invalid console/wait command"),
     }
