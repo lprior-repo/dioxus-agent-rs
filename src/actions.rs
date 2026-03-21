@@ -81,32 +81,9 @@ pub async fn execute_command(config: Config) -> Result<()> {
     };
 
     if let Some(trace_dir) = &config.trace {
-        let _ = std::fs::create_dir_all(trace_dir);
-        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
-        
-        let trace_file = format!("{trace_dir}/{timestamp}-trace.json");
-        let png_file = format!("{trace_dir}/{timestamp}-screenshot.png");
-        let tree_file = format!("{trace_dir}/{timestamp}-semantic.txt");
-        
-        let params = chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder().format(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png).build();
-        if let Ok(png) = page.screenshot(params).await {
-            let _ = std::fs::write(&png_file, png);
+        if let Err(e) = execute_trace(&page, trace_dir, &config, result.is_ok()).await {
+            eprintln!("Warning: Failed to execute trace: {e}");
         }
-        
-        if let Ok(tree) = page.evaluate(generate_semantic_tree_js().as_str()).await
-            && let Ok(tree_str) = tree.into_value::<String>() {
-                let _ = std::fs::write(&tree_file, tree_str);
-            }
-        
-        let trace_data = serde_json::json!({
-            "command": format!("{:?}", config.command),
-            "url": config.url.as_str(),
-            "timestamp": timestamp,
-            "success": result.is_ok(),
-            "screenshot": png_file,
-            "semantic_tree": tree_file,
-        });
-        let _ = std::fs::write(trace_file, serde_json::to_string_pretty(&trace_data).unwrap_or_default());
     }
 
     let _ = browser.close().await;
@@ -306,30 +283,9 @@ async fn handle_eval_screenshot(page: &Page, command: &Commands) -> Result<Value
                 return Ok(serde_json::json!("Baseline created"));
             }
             
-            let img1 = image::load_from_memory(&buf).context("Failed to load new screenshot")?;
-            let img2 = image::open(baseline).context("Failed to load baseline")?;
+            let baseline_buf = std::fs::read(baseline).context("Failed to load baseline from disk")?;
+            let percent_diff = crate::calculations::calculate_pixel_diff(&buf, &baseline_buf)?;
             
-            if img1.width() != img2.width() || img1.height() != img2.height() {
-                std::fs::write(failure_path, buf)?;
-                anyhow::bail!("Dimensions mismatch. Baseline: {}x{}, New: {}x{}", img2.width(), img2.height(), img1.width(), img1.height());
-            }
-            
-            let img1_rgb = img1.to_rgb8();
-            let img2_rgb = img2.to_rgb8();
-            
-            let mut diff_pixels = 0;
-            let total_pixels = img1.width() * img1.height();
-            
-            for (p1, p2) in img1_rgb.pixels().zip(img2_rgb.pixels()) {
-                let r_diff = i32::from(p1[0]) - i32::from(p2[0]);
-                let g_diff = i32::from(p1[1]) - i32::from(p2[1]);
-                let b_diff = i32::from(p1[2]) - i32::from(p2[2]);
-                if r_diff.abs() + g_diff.abs() + b_diff.abs() > 10 {
-                    diff_pixels += 1;
-                }
-            }
-            
-            let percent_diff = (f64::from(diff_pixels) / f64::from(total_pixels)) * 100.0;
             if percent_diff > *tolerance {
                 std::fs::write(failure_path, buf)?;
                 anyhow::bail!("Visual regression failed: {percent_diff:.2}% diff (tolerance: {tolerance:.2}%)");
@@ -730,4 +686,22 @@ async fn handle_storage(page: &Page, command: &Commands) -> Result<Value> {
         Commands::SessionClear => { page.evaluate(generate_storage_js("session", "clear", None, None).as_str()).await?; Ok(serde_json::json!("cleared")) }
         _ => anyhow::bail!("Invalid storage command"),
     }
+}
+
+
+async fn execute_trace(page: &Page, trace_dir: &str, config: &Config, success: bool) -> Result<()> {
+    std::fs::create_dir_all(trace_dir)?;
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
+    let trace_file = format!("{trace_dir}/{timestamp}-trace.json");
+    let png_file = format!("{trace_dir}/{timestamp}-screenshot.png");
+    let tree_file = format!("{trace_dir}/{timestamp}-semantic.txt");
+    let params = chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder().format(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png).build();
+    let png = page.screenshot(params).await?;
+    std::fs::write(&png_file, png)?;
+    let tree = page.evaluate(generate_semantic_tree_js().as_str()).await?;
+    let tree_str = tree.into_value::<String>()?;
+    std::fs::write(&tree_file, tree_str)?;
+    let payload = crate::calculations::generate_trace_payload(&format!("{:?}", config.command), config.url.as_str(), timestamp, success, &png_file, &tree_file)?;
+    std::fs::write(trace_file, payload)?;
+    Ok(())
 }
