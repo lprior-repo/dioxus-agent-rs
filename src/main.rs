@@ -27,11 +27,43 @@ async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
 
     // Validate CLI inputs - pure calculation
-    let config =
-        validate_inputs(&cli).map_err(|e| anyhow::anyhow!("Invalid CLI arguments: {e}"))?;
+    let config = match validate_inputs(&cli) {
+        Ok(c) => c,
+        Err(e) => {
+            if cli.json {
+                let output = crate::data::CommandOutput {
+                    success: false,
+                    command: format!("{:?}", cli.command).split_whitespace().next().unwrap_or("unknown").to_string(),
+                    target: None,
+                    data: serde_json::Value::Null,
+                    error: Some(format!("Invalid CLI arguments: {e}")),
+                    logs: vec![],
+                };
+                println!("{}", serde_json::to_string(&output).unwrap_or_else(|_| r#"{"success":false,"command":"unknown","data":null,"error":"Failed to serialize output","logs":[]}"#.to_string()));
+                std::process::exit(1);
+            } else {
+                return Err(anyhow::anyhow!("Invalid CLI arguments: {e}"));
+            }
+        }
+    };
 
     // Execute the command - impure action at shell boundary
-    execute_command(config)
-        .await
-        .map_err(|e| anyhow::anyhow!("Command execution failed: {e}"))
+    if let Err(e) = execute_command(config).await {
+        if cli.json {
+            let output = crate::data::CommandOutput {
+                success: false,
+                command: format!("{:?}", cli.command).split_whitespace().next().unwrap_or("unknown").to_string(),
+                target: None,
+                data: serde_json::Value::Null,
+                error: Some(format!("Command execution failed: {e}")),
+                logs: vec![],
+            };
+            println!("{}", serde_json::to_string(&output).unwrap_or_else(|_| r#"{"success":false,"command":"unknown","data":null,"error":"Failed to serialize output","logs":[]}"#.to_string()));
+            std::process::exit(1);
+        } else {
+            return Err(anyhow::anyhow!("Command execution failed: {e}"));
+        }
+    }
+    
+    Ok(())
 }

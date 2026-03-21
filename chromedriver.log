@@ -1,0 +1,8 @@
+Starting ChromeDriver 146.0.7680.80 (f08938029c887ea624da7a1717059788ed95034d-refs/branch-heads/7680_65@{#34}) on port 4444
+Only local connections are allowed.
+Please see https://chromedriver.chromium.org/security-considerations for suggestions on keeping ChromeDriver safe.
+ChromeDriver was started successfully on port 4444.
+[1774063330.775][SEVERE]: Timed out receiving message from renderer: 299.996
+[1774063330.775][SEVERE]: Timed out receiving message from renderer: 299.996
+[1774063481.889][SEVERE]: Timed out receiving message from renderer: 299.996
+[1774063481.889][SEVERE]: Timed out receiving message from renderer: 299.996

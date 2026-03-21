@@ -9,7 +9,6 @@
 //! All I/O happens here
 
 #![allow(dead_code)]
-#![allow(clippy::too_many_lines)]
 
 use crate::calculations::{
     generate_computed_style_js, generate_console_js, generate_css_injection_js,
@@ -19,59 +18,50 @@ use crate::calculations::{
     generate_screenshot_annotated_js, generate_scroll_to_text_js, generate_semantic_tree_js,
     generate_storage_js, generate_wait_element_js, generate_wait_gone_js,
 };
-use crate::data::{Commands, Config};
+use crate::data::{BrowserMode, Commands, Config, OutputFormat, WaitStrategy};
 use anyhow::{Context, Result};
-use fantoccini::ClientBuilder;
-use fantoccini::Locator;
-use fantoccini::elements::Element;
+use fantoccini::{Client, ClientBuilder, Locator};
 use serde_json::Value;
 use std::time::Duration;
 
-/// Execute the command - main entry point for actions
 pub async fn execute_command(config: Config) -> Result<()> {
-    // Build Chrome capabilities
     let mut caps = serde_json::Map::new();
     let mut args = vec!["no-sandbox", "disable-dev-shm-usage", "disable-gpu"];
-    if !config.no_headless {
+    if config.mode == BrowserMode::Headless {
         args.push("headless");
     }
-    let chrome_opts = serde_json::json!({
-        "args": args
-    });
-    caps.insert("goog:chromeOptions".to_string(), chrome_opts);
+    caps.insert(
+        "goog:chromeOptions".to_string(),
+        serde_json::json!({ "args": args }),
+    );
 
-    // Connect to ChromeDriver
     let mut client = ClientBuilder::native()
         .capabilities(caps)
-        .connect(&config.webdriver_url)
+        .connect(config.webdriver_url.as_str())
         .await
         .context("Failed to connect to ChromeDriver")?;
 
-    // Navigate to URL
     client
-        .goto(&config.url)
+        .goto(config.url.as_str())
         .await
         .with_context(|| format!("Failed to navigate to {}", config.url))?;
 
-    // Give Dioxus time to hydrate
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Inject console capture script
-    inject_console_capture(&mut client).await?;
+    inject_console_capture(&mut client).await.context("Failed to inject console capture script")?;
 
-    if config.auto_wait {
+    if config.wait == WaitStrategy::Auto {
         let js = generate_hydration_wait_js();
         let _ = client.execute(&js, vec![]).await;
     }
 
-    // Execute the command
     let result = if matches!(config.command, Commands::Repl) {
         run_repl(&mut client).await?;
         Ok(serde_json::Value::Null)
     } else {
         match tokio::time::timeout(
             config.timeout,
-            execute_command_internal(&mut client, &config.command),
+            dispatch_command(&mut client, &config.command),
         )
         .await
         {
@@ -83,10 +73,9 @@ pub async fn execute_command(config: Config) -> Result<()> {
         }
     };
 
-    // Clean up
     let _ = client.close().await;
 
-    if config.json {
+    if config.output == OutputFormat::Json {
         let (success, data, error) = match result {
             Ok(v) => (true, v, None),
             Err(e) => (false, serde_json::Value::Null, Some(e.to_string())),
@@ -104,11 +93,13 @@ pub async fn execute_command(config: Config) -> Result<()> {
             error,
             logs: vec![],
         };
-        println!("{}", serde_json::to_string(&output).unwrap());
+        // It's safe to unwrap serde_json::to_string here because the struct is explicitly constructed
+        // with known safe primitive types and standard Values.
+        println!("{}", serde_json::to_string(&output).unwrap_or_else(|_| r#"{"success":false,"command":"unknown","data":null,"error":"Failed to serialize JSON output","logs":[]}"#.to_string()));
         Ok(())
     } else {
         match result {
-            Ok(serde_json::Value::String(s)) => {
+            Ok(Value::String(s)) => {
                 println!("{s}");
                 Ok(())
             }
@@ -122,7 +113,7 @@ pub async fn execute_command(config: Config) -> Result<()> {
     }
 }
 
-async fn run_repl(client: &mut fantoccini::Client) -> Result<()> {
+async fn run_repl(client: &mut Client) -> Result<()> {
     let current_url = client
         .current_url()
         .await
@@ -131,9 +122,7 @@ async fn run_repl(client: &mut fantoccini::Client) -> Result<()> {
     println!("Dioxus Agent REPL connected to {current_url}");
     println!("Type 'help' for commands, 'exit' to quit.");
 
-    // Using rustyline for REPL inside tokio spawn_blocking
     let mut rl = rustyline::DefaultEditor::new()?;
-
     loop {
         let readline = tokio::task::block_in_place(|| rl.readline("dioxus> "));
         match readline {
@@ -149,44 +138,30 @@ async fn run_repl(client: &mut fantoccini::Client) -> Result<()> {
 
                 if let Some(mut args) = shlex::split(input) {
                     args.insert(0, "dioxus-agent-rs".to_string());
-
                     match clap::Parser::try_parse_from(args) {
                         Ok(crate::data::Cli { command: cmd, .. }) => {
                             if matches!(cmd, Commands::Repl) {
                                 println!("Already in REPL mode.");
                                 continue;
                             }
-                            if let Err(e) = execute_command_internal(client, &cmd).await {
-                                println!("Error: {e}");
+                            match dispatch_command(client, &cmd).await {
+                                Ok(res) => println!("Result: {res}"),
+                                Err(e) => println!("Error: {e}"),
                             }
                         }
-                        Err(e) => {
-                            println!("{e}");
-                        }
+                        Err(e) => println!("{e}"),
                     }
                 }
             }
-            Err(rustyline::error::ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
-            }
-            Err(rustyline::error::ReadlineError::Eof) => {
-                println!("CTRL-D");
-                break;
-            }
-            Err(err) => {
-                println!("Error: {err:?}");
-                break;
-            }
+            Err(_) => break,
         }
     }
     Ok(())
 }
 
-/// Inject console capture script
-#[allow(clippy::unnecessary_mut_passed)]
-async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
-    let js = "
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn inject_console_capture(client: &mut Client) -> Result<()> {
+    let js = r"
         window.__captured_logs = [];
         window.__captured_network = [];
         window.__mock_routes = window.__mock_routes || [];
@@ -202,7 +177,6 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
         window.__active_requests = 0;
         window.fetch = async function(...args) {
             const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || 'unknown';
-            
             for (const route of window.__mock_routes) {
                 if (url.includes(route.pattern)) {
                     return new Response(route.response, {
@@ -211,7 +185,6 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
                     });
                 }
             }
-
             window.__active_requests++;
             window.__captured_network.push({ type: 'fetch', url: url });
             try {
@@ -223,668 +196,215 @@ async fn inject_console_capture(client: &mut fantoccini::Client) -> Result<()> {
                 throw error;
             }
         };
-        });
-        const originalFetch = window.fetch;
-        window.fetch = async function(...args) {
-            const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || 'unknown';
-            window.__captured_network.push({ type: 'fetch', url: url });
-            return originalFetch.apply(this, args);
-        };
         const originalXhrOpen = XMLHttpRequest.prototype.open;
+        const originalXhrSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-            window.__captured_network.push({ type: 'xhr', method, url });
+            this._url = url;
+            this._method = method;
             return originalXhrOpen.apply(this, [method, url, ...rest]);
         };
+        XMLHttpRequest.prototype.send = function(...args) {
+            window.__active_requests++;
+            window.__captured_network.push({ type: 'xhr', method: this._method, url: this._url });
+            this.addEventListener('loadend', () => window.__active_requests--);
+            this.addEventListener('error', () => window.__active_requests--);
+            this.addEventListener('abort', () => window.__active_requests--);
+            return originalXhrSend.apply(this, args);
+        };
     ";
-    let _ = client.execute(js, vec![]).await;
+    client.execute(js, vec![]).await.map(|_| ())?;
     Ok(())
 }
 
-/// Internal command execution - handles all 50+ commands
-#[allow(clippy::unnecessary_mut_passed)]
-async fn execute_command_internal(
-    client: &mut fantoccini::Client,
-    command: &Commands,
-) -> Result<Value> {
+/// Command Dispatcher
+async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Value> {
     match command {
-        // ============ Navigation ============
-        Commands::Dom => {
-            let source = client.source().await.context("Failed to get DOM")?;
-            Ok(serde_json::json!(source))
+        Commands::Dom | Commands::Title | Commands::Url | Commands::Refresh | Commands::Back | Commands::Forward => {
+            handle_navigation(client, command).await
         }
-        Commands::Title => {
-            let title = client.title().await.context("Failed to get title")?;
-            Ok(serde_json::json!(title))
+        Commands::Click { .. } | Commands::DoubleClick { .. } | Commands::RightClick { .. } | Commands::Hover { .. } | Commands::Text { .. } | Commands::Clear { .. } | Commands::Submit { .. } | Commands::Select { .. } | Commands::Check { .. } | Commands::Uncheck { .. } => {
+            handle_interaction(client, command).await
         }
-        Commands::Url => {
-            let url = client.current_url().await.context("Failed to get URL")?;
-            Ok(serde_json::json!(url.to_string()))
+        Commands::GetText { .. } | Commands::Attr { .. } | Commands::Classes { .. } | Commands::TagName { .. } | Commands::Visible { .. } | Commands::Enabled { .. } | Commands::Selected { .. } | Commands::Count { .. } | Commands::FindAll { .. } | Commands::Exists { .. } => {
+            handle_queries(client, command).await
         }
-        Commands::Refresh => {
-            client.refresh().await.context("Failed to refresh")?;
-            Ok(serde_json::json!("Page refreshed"))
-        }
-        Commands::Back => {
-            client.back().await.context("Failed to go back")?;
-            Ok(serde_json::json!("Navigated back"))
-        }
-        Commands::Forward => {
-            client.forward().await.context("Failed to go forward")?;
-            Ok(serde_json::json!("Navigated forward"))
-        }
-
-        // ============ Element Interaction ============
-        Commands::Click { selector } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            el.click().await.context("Failed to click element")?;
-            Ok(serde_json::json!(selector))
-        }
-        Commands::DoubleClick { selector } => {
-            double_click(client, selector)
-                .await
-                .context("Failed to double-click element")?;
-            Ok(serde_json::json!(selector))
-        }
-        Commands::RightClick { selector } => {
-            right_click(client, selector)
-                .await
-                .context("Failed to right-click element")?;
-            Ok(serde_json::json!(selector))
-        }
-        Commands::Hover { selector } => {
-            hover(client, selector)
-                .await
-                .context("Failed to hover element")?;
-            Ok(serde_json::json!(selector))
-        }
-        Commands::Text { selector, value } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            el.send_keys(value).await.context("Failed to set text")?;
-            Ok(serde_json::json!(format!("{selector} {value}")))
-        }
-        Commands::Clear { selector } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            let backspace: &str = &"\u{0008}".repeat(100);
-            let delete: &str = "\u{0001}\u{0003}";
-            el.send_keys(backspace).await?; // Backspace
-            el.send_keys(delete).await?; // Ctrl+A + Delete
-            Ok(serde_json::json!(selector))
-        }
-        Commands::Submit { selector } => {
-            submit_form(client, selector)
-                .await
-                .context("Failed to submit form")?;
-            Ok(serde_json::json!(selector))
-        }
-        Commands::Select { selector, value } => {
-            select_option(client, selector, value)
-                .await
-                .context("Failed to select option")?;
-            Ok(serde_json::json!(format!("{selector} {value}")))
-        }
-        Commands::Check { selector } => {
-            check_element(client, selector)
-                .await
-                .context("Failed to check element")?;
-            Ok(serde_json::json!(selector))
-        }
-        Commands::Uncheck { selector } => {
-            uncheck_element(client, selector)
-                .await
-                .context("Failed to uncheck element")?;
-            Ok(serde_json::json!(selector))
-        }
-
-        // ============ Element Queries ============
-        Commands::GetText { selector } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            let text = el.text().await.context("Failed to get text")?;
-            Ok(serde_json::json!(text))
-        }
-        Commands::Attr {
-            selector,
-            attribute,
-        } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            let attr = el
-                .attr(attribute.as_str())
-                .await
-                .context("Failed to get attribute")?;
-            match attr {
-                Some(v) => Ok(serde_json::json!(v)),
-                None => Ok(serde_json::Value::Null),
-            }
-        }
-        Commands::Classes { selector } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            let classes = el.attr("class").await.context("Failed to get classes")?;
-            match classes {
-                Some(c) => {
-                    let class_list: Vec<&str> = c.split_whitespace().collect();
-                    Ok(serde_json::json!(format!("{}", class_list.join(" "))))
-                }
-                None => Ok(serde_json::Value::Null),
-            }
-        }
-        Commands::TagName { selector } => {
-            let js = format!(
-                "const el = document.querySelector('{}'); return el ? el.tagName.toLowerCase() : null;",
-                selector.replace('\'', "\\'")
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to get tag name")?;
-            if let Some(name) = result.as_str() {
-                Ok(serde_json::json!(name))
-            } else {
-                Ok(serde_json::Value::Null)
-            }
-        }
-        Commands::Visible { selector } => {
-            let js = format!(
-                "const el = document.querySelector('{}'); if (!el) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';",
-                selector.replace('\'', "\\'")
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to check visibility")?;
-            if let Some(b) = result.as_bool() {
-                Ok(serde_json::json!(b))
-            } else {
-                Ok(serde_json::json!("false"))
-            }
-        }
-        Commands::Enabled { selector } => {
-            let js = format!(
-                "const el = document.querySelector('{}'); if (!el) return false; return !el.disabled;",
-                selector.replace('\'', "\\'")
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to check enabled")?;
-            if let Some(b) = result.as_bool() {
-                Ok(serde_json::json!(b))
-            } else {
-                Ok(serde_json::json!("false"))
-            }
-        }
-        Commands::Selected { selector } => {
-            let js = format!(
-                "const el = document.querySelector('{}'); if (!el) return false; return el.checked || el.selected;",
-                selector.replace('\'', "\\'")
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to check selected")?;
-            if let Some(b) = result.as_bool() {
-                Ok(serde_json::json!(b))
-            } else {
-                Ok(serde_json::json!("false"))
-            }
-        }
-        Commands::Count { selector } => {
-            let count = client
-                .find_all(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Failed to count: {selector}"))?
-                .len();
-            Ok(serde_json::json!(count))
-        }
-        Commands::FindAll { selector } => {
-            let elements = client
-                .find_all(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Failed to find elements: {selector}"))?;
-            let mut results = Vec::new();
-            for el in elements {
-                let html = el.html(true).await.unwrap_or_default();
-                results.push(html);
-            }
-            Ok(serde_json::json!(results))
-        }
-        Commands::Exists { selector } => {
-            let exists = client.find(Locator::Css(selector)).await.is_ok();
-            Ok(serde_json::json!(exists))
-        }
-
-        // ============ JavaScript & Execution ============
         Commands::Eval { js } => {
-            let result = client
-                .execute(js, vec![])
-                .await
-                .context("JavaScript execution failed")?;
-            Ok(serde_json::json!(result))
+            let res = client.execute(js, vec![]).await?;
+            Ok(serde_json::json!(res))
         }
         Commands::InjectCss { css } => {
-            let js = generate_css_injection_js(css);
-            client
-                .execute(&js, vec![])
-                .await
-                .context("CSS injection failed")?;
+            client.execute(&generate_css_injection_js(css), vec![]).await?;
             Ok(serde_json::json!("CSS injected"))
         }
-
-        // ============ Screenshot ============
         Commands::Screenshot { path } => {
-            let png = client.screenshot().await.context("Screenshot failed")?;
-            std::fs::write(path, png).context("Failed to write screenshot")?;
+            let png = client.screenshot().await?;
+            std::fs::write(path, png)?;
             Ok(serde_json::json!(path))
         }
         Commands::ElementScreenshot { selector, path } => {
-            // First get element bounds via JS
             let js = generate_element_screenshot_js(selector);
-            let bounds: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to get element bounds")?;
+            let bounds: Value = client.execute(&js, vec![]).await?;
             if bounds.is_null() {
                 anyhow::bail!("Element not found: {selector}");
             }
-            // For now, take full screenshot - element-specific requires Chrome DevTools Protocol
-            let png = client.screenshot().await.context("Screenshot failed")?;
-            std::fs::write(path, png).context("Failed to write screenshot")?;
+            let png = client.screenshot().await?;
+            std::fs::write(path, png)?;
             Ok(serde_json::json!(path))
         }
-
-        // ============ Viewport & Scrolling ============
         Commands::Viewport { width, height } => {
-            client
-                .set_window_size(*width, *height)
-                .await
-                .context("Failed to set viewport")?;
+            client.set_window_size(*width, *height).await?;
             Ok(serde_json::json!(format!("{width} {height}")))
         }
         Commands::Scroll { selector } => {
-            scroll_into_view(client, selector)
-                .await
-                .context("Failed to scroll to element")?;
+            let js = format!("const el = document.querySelector('{}'); if (el) {{ el.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
             Ok(serde_json::json!(selector))
         }
         Commands::ScrollBy { x, y } => {
-            let js = format!("window.scrollBy({x}, {y}); return true;");
-            client.execute(&js, vec![]).await.context("Scroll failed")?;
+            client.execute(&format!("window.scrollBy({x}, {y}); return true;"), vec![]).await?;
             Ok(serde_json::json!(format!("{x} {y}")))
         }
-
-        // ============ Keyboard ============
         Commands::Key { key } => {
-            let js = generate_keypress_js(key);
-            let _result: Value = client.execute(&js, vec![]).await?;
+            client.execute(&generate_keypress_js(key), vec![]).await?;
             Ok(serde_json::json!(key))
         }
         Commands::KeyCombo { combo } => {
-            let js = generate_keycombo_js(combo);
-            let _result: Value = client.execute(&js, vec![]).await?;
+            client.execute(&generate_keycombo_js(combo), vec![]).await?;
             Ok(serde_json::json!(combo))
         }
-
-        // ============ Storage ============
-        Commands::Cookies => {
-            let cookies = client
-                .get_all_cookies()
-                .await
-                .context("Failed to get cookies")?;
-            let mut results = Vec::new();
-            for cookie in cookies {
-                results.push(format!(
-                    "{}={}; Path={}; Domain={}",
-                    cookie.name(),
-                    cookie.value(),
-                    cookie.path().unwrap_or("/"),
-                    cookie.domain().unwrap_or("")
-                ));
-            }
-            Ok(serde_json::json!(results))
+        Commands::Cookies | Commands::SetCookie { .. } | Commands::DeleteCookie { .. } | Commands::LocalGet { .. } | Commands::LocalSet { .. } | Commands::LocalRemove { .. } | Commands::LocalClear | Commands::SessionGet { .. } | Commands::SessionSet { .. } | Commands::SessionClear => {
+            handle_storage(client, command).await
         }
-        Commands::SetCookie {
-            name,
-            value,
-            domain,
-            path,
-        } => {
-            // Use JavaScript to set cookie for simplicity
-            let domain_part = domain
-                .as_ref()
-                .map(|d| format!("; domain={d}"))
-                .unwrap_or_default();
-            let path_part = path
-                .as_ref()
-                .map(|p| format!("; path={p}"))
-                .unwrap_or_default();
-            let cookie_str = format!("{value}{domain_part}{path_part}");
-            let js = format!(
-                "document.cookie = '{}={}'; return true;",
-                name.replace('\'', "\\'"),
-                cookie_str.replace('\'', "\\'")
-            );
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to set cookie")?;
-            Ok(serde_json::json!(name))
-        }
-        Commands::DeleteCookie { name } => {
-            client
-                .delete_cookie(name)
-                .await
-                .context("Failed to delete cookie")?;
-            Ok(serde_json::json!(name))
-        }
-        Commands::LocalGet { key } => {
-            let js = generate_storage_js("local", "get", Some(key), None);
-            let result: Value = client.execute(&js, vec![]).await?;
-            Ok(serde_json::json!(result))
-        }
-        Commands::LocalSet { key, value } => {
-            let js = generate_storage_js("local", "set", Some(key), Some(value));
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to set localStorage")?;
-            Ok(serde_json::json!(key))
-        }
-        Commands::LocalRemove { key } => {
-            let js = generate_storage_js("local", "remove", Some(key), None);
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to remove localStorage")?;
-            Ok(serde_json::json!(key))
-        }
-        Commands::LocalClear => {
-            let js = generate_storage_js("local", "clear", None, None);
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to clear localStorage")?;
-            Ok(serde_json::json!("cleared"))
-        }
-        Commands::SessionGet { key } => {
-            let js = generate_storage_js("session", "get", Some(key), None);
-            let result: Value = client.execute(&js, vec![]).await?;
-            Ok(serde_json::json!(result))
-        }
-        Commands::SessionSet { key, value } => {
-            let js = generate_storage_js("session", "set", Some(key), Some(value));
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to set sessionStorage")?;
-            Ok(serde_json::json!(key))
-        }
-        Commands::SessionClear => {
-            let js = generate_storage_js("session", "clear", None, None);
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to clear sessionStorage")?;
-            Ok(serde_json::json!("cleared"))
-        }
-
-        // ============ Console ============
         Commands::Console => {
-            let js = generate_console_js(None);
-            let result: Value = client.execute(&js, vec![]).await?;
-            let mut results = Vec::new();
-            if let Some(arr) = result.as_array() {
-                for entry in arr {
-                    results.push(entry.clone());
-                }
-            }
-            Ok(serde_json::json!(results))
+            let res = client.execute(&generate_console_js(None), vec![]).await?;
+            Ok(serde_json::json!(res))
         }
         Commands::ConsoleLog { r#type } => {
-            let js = generate_console_js(Some(r#type));
-            let result: Value = client.execute(&js, vec![]).await?;
-            let mut results = Vec::new();
-            if let Some(arr) = result.as_array() {
-                for entry in arr {
-                    results.push(entry.clone());
-                }
-            }
-            Ok(serde_json::json!(results))
+            let res = client.execute(&generate_console_js(Some(r#type)), vec![]).await?;
+            Ok(serde_json::json!(res))
         }
-
-        // ============ Waiting ============
         Commands::Wait { selector } => {
-            let js = generate_wait_element_js(selector);
-            let _: Value = client
-                .execute(&js, vec![])
-                .await
-                .with_context(|| format!("Timeout waiting for: {selector}"))?;
+            client.execute(&generate_wait_element_js(selector), vec![]).await?;
             Ok(serde_json::json!(selector))
         }
         Commands::WaitGone { selector } => {
-            let js = generate_wait_gone_js(selector);
-            let _: Value = client
-                .execute(&js, vec![])
-                .await
-                .with_context(|| format!("Timeout waiting for gone: {selector}"))?;
+            client.execute(&generate_wait_gone_js(selector), vec![]).await?;
             Ok(serde_json::json!(selector))
         }
         Commands::WaitNav => {
-            // Wait for page to load - simple implementation
             tokio::time::sleep(Duration::from_millis(500)).await;
             Ok(serde_json::json!("navigation complete"))
         }
         Commands::WaitHydration => {
-            let js = generate_hydration_wait_js();
-            let _: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Hydration wait failed")?;
+            client.execute(&generate_hydration_wait_js(), vec![]).await?;
             Ok(serde_json::json!("hydrated"))
         }
-
-        // ============ Dioxus-Specific ============
         Commands::DioxusState => {
-            let js = generate_dioxus_state_js();
-            let result: Value = client.execute(&js, vec![]).await?;
-            Ok(serde_json::json!(result))
+            let res = client.execute(&generate_dioxus_state_js(), vec![]).await?;
+            Ok(serde_json::json!(res))
         }
         Commands::DioxusClick { target } => {
-            let js = generate_dioxus_click_js(target);
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Dioxus click failed")?;
-            if result.as_bool() == Some(true) {
+            let res = client.execute(&generate_dioxus_click_js(target), vec![]).await?;
+            if res.as_bool() == Some(true) {
                 Ok(serde_json::json!(target))
             } else {
                 anyhow::bail!("Target not found: {target}");
             }
         }
-
-        // ============ AI Agent Extended ============
+        Commands::SemanticTree => {
+            let res = client.execute(&generate_semantic_tree_js(), vec![]).await?;
+            Ok(serde_json::json!(res))
+        }
+        Commands::Style { selector, property } => {
+            let res = client.execute(&generate_computed_style_js(selector, property), vec![]).await?;
+            Ok(if res.is_null() { Value::Null } else { serde_json::json!(res) })
+        }
         Commands::Upload { selector, path } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-
-            // Resolve to absolute path if needed
-            let abs_path = std::fs::canonicalize(path).context("Invalid path")?;
-            el.send_keys(abs_path.to_str().unwrap_or(""))
-                .await
-                .context("Failed to upload file")?;
+            let el = client.find(Locator::Css(selector)).await?;
+            let abs_path = std::fs::canonicalize(path)?;
+            el.send_keys(abs_path.to_string_lossy().as_ref()).await?;
             Ok(serde_json::json!(selector))
         }
         Commands::FillForm { json_data } => {
             let map: serde_json::Map<String, Value> = serde_json::from_str(json_data)?;
             let mut results = Vec::new();
             for (selector, val) in map {
-                let text_val = match val {
-                    Value::String(s) => s,
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    _ => continue,
-                };
-                let el = client
-                    .find(Locator::Css(&selector))
-                    .await
-                    .with_context(|| format!("Element not found: {selector}"))?;
-
-                // Clear first
-                let backspace: &str = &"\u{0008}".repeat(100);
-                let delete: &str = "\u{0001}\u{0003}";
-                el.send_keys(backspace).await?;
-                el.send_keys(delete).await?;
-
-                // Send new text
-                el.send_keys(&text_val)
-                    .await
-                    .context("Failed to set text")?;
-                results.push(selector);
-            }
-            Ok(serde_json::json!(results))
-        }
-        Commands::FuzzyClick { text } => {
-            let js = generate_fuzzy_click_js(text);
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("FuzzyClick execution failed")?;
-            if result.is_null() {
-                anyhow::bail!("FuzzyClick could not find interactable element with text: {text}");
-            }
-            Ok(serde_json::json!(result))
-        }
-        Commands::WaitNetworkIdle => {
-            let js = generate_network_idle_js();
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("WaitNetworkIdle execution failed")?;
-            if result.as_bool() == Some(true) {
-                Ok(serde_json::json!("Network idle"))
-            } else {
-                anyhow::bail!("Timeout waiting for network to become idle");
-            }
-        }
-        Commands::ScrollToText { container, text } => {
-            let js = generate_scroll_to_text_js(container, text);
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("ScrollToText execution failed")?;
-            if result.is_null() {
-                anyhow::bail!("ScrollToText container not found: {container}");
-            }
-            if result.as_bool() == Some(true) {
-                Ok(serde_json::json!(text))
-            } else {
-                anyhow::bail!("ScrollToText reached bottom but text was not found: {text}");
-            }
-        }
-        Commands::ExtractTable { selector } => {
-            let js = generate_extract_table_js(selector);
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("ExtractTable execution failed")?;
-            if result.is_null() {
-                anyhow::bail!("ExtractTable target not found or has no headers: {selector}");
-            }
-            Ok(result)
-        }
-        Commands::NetworkLogs => {
-            let result: Value = client
-                .execute("return window.__captured_network || [];", vec![])
-                .await?;
-            let mut results = Vec::new();
-            if let Some(arr) = result.as_array() {
-                for entry in arr {
-                    results.push(entry.clone());
+                if let Some(text_val) = val.as_str() {
+                    let el = client.find(Locator::Css(&selector)).await?;
+                    el.clear().await?;
+                    el.send_keys(text_val).await?;
+                    results.push(selector);
                 }
             }
             Ok(serde_json::json!(results))
         }
+        Commands::NetworkLogs => {
+            let res = client.execute("return window.__captured_network || [];", vec![]).await?;
+            Ok(serde_json::json!(res))
+        }
         Commands::AssertText { selector, expected } => {
-            let el = client
-                .find(Locator::Css(selector))
-                .await
-                .with_context(|| format!("Element not found: {selector}"))?;
-            let text = el.text().await.context("Failed to get text")?;
+            let el = client.find(Locator::Css(selector)).await?;
+            let text = el.text().await?;
             if text.contains(expected) {
                 Ok(serde_json::json!(true))
             } else {
-                anyhow::bail!(
-                    "Text assertion failed. Expected to contain: '{expected}', found: '{text}'"
-                );
+                anyhow::bail!("Text assertion failed. Expected: '{expected}', found: '{text}'");
             }
         }
         Commands::AssertVisible { selector } => {
-            let js = format!(
-                "const el = document.querySelector('{}'); if (!el) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';",
-                selector.replace('\'', "\\'")
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to check visibility")?;
-            if result.as_bool() == Some(true) {
+            let js = format!("const el = document.querySelector('{}'); if (!el) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';", crate::calculations::escape_js_string(selector));
+            if client.execute(&js, vec![]).await?.as_bool() == Some(true) {
                 Ok(serde_json::json!(true))
             } else {
                 anyhow::bail!("Visibility assertion failed for: {selector}");
             }
         }
         Commands::AssertExists { selector } => {
-            let exists = client.find(Locator::Css(selector)).await.is_ok();
-            if exists {
+            if client.find(Locator::Css(selector)).await.is_ok() {
                 Ok(serde_json::json!(true))
             } else {
                 anyhow::bail!("Existence assertion failed for: {selector}");
             }
         }
-
-        // ============ God-Tier Playwright Features ============
-        Commands::MockRoute {
-            url_pattern,
-            response_json,
-            status,
-        } => {
+        Commands::FuzzyClick { text } => {
+            let res = client.execute(&generate_fuzzy_click_js(text), vec![]).await?;
+            if res.is_null() { anyhow::bail!("FuzzyClick failed to find: {text}"); }
+            Ok(serde_json::json!(res))
+        }
+        Commands::WaitNetworkIdle => {
+            if client.execute(&generate_network_idle_js(), vec![]).await?.as_bool() == Some(true) {
+                Ok(serde_json::json!("Network idle"))
+            } else {
+                anyhow::bail!("Timeout waiting for network to become idle");
+            }
+        }
+        Commands::ScrollToText { container, text } => {
+            let res = client.execute(&generate_scroll_to_text_js(container, text), vec![]).await?;
+            if res.as_bool() == Some(true) {
+                Ok(serde_json::json!(text))
+            } else {
+                anyhow::bail!("ScrollToText failed to find: {text}");
+            }
+        }
+        Commands::ExtractTable { selector } => {
+            let res = client.execute(&generate_extract_table_js(selector), vec![]).await?;
+            if res.is_null() { anyhow::bail!("Table not found: {selector}"); }
+            Ok(res)
+        }
+        Commands::MockRoute { url_pattern, response_json, status } => {
             let js = format!(
-                "window.__mock_routes = window.__mock_routes || []; \
-                 window.__mock_routes.push({{ pattern: '{}', response: '{}', status: {} }}); \
-                 return true;",
-                url_pattern.replace('\'', "\\'"),
-                response_json.replace('\'', "\\'").replace('\n', " "),
+                "window.__mock_routes = window.__mock_routes || []; window.__mock_routes.push({{ pattern: '{}', response: '{}', status: {} }}); return true;",
+                crate::calculations::escape_js_string(url_pattern),
+                crate::calculations::escape_js_string(response_json),
                 status
             );
-            client
-                .execute(&js, vec![])
-                .await
-                .context("MockRoute execution failed")?;
+            client.execute(&js, vec![]).await?;
             Ok(serde_json::json!(url_pattern))
         }
         Commands::ShadowClick { selector } => {
             let parts: Vec<&str> = selector.split(">>").map(str::trim).collect();
-            let parts_json = serde_json::to_string(&parts)?;
-            let js = format!(
-                "
-                const selectors = {parts_json};
+            let js = format!("
+                const selectors = {};
                 let current = document;
                 for (let i = 0; i < selectors.length; i++) {{
                     if (current.shadowRoot) current = current.shadowRoot;
@@ -893,283 +413,183 @@ async fn execute_command_internal(
                 }}
                 current.click();
                 return true;
-            "
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("ShadowClick execution failed")?;
-            if result.as_bool() == Some(true) {
+            ", serde_json::to_string(&parts)?);
+            if client.execute(&js, vec![]).await?.as_bool() == Some(true) {
                 Ok(serde_json::json!(selector))
             } else {
                 anyhow::bail!("Shadow element not found: {selector}");
             }
         }
         Commands::DragAndDrop { source, target } => {
-            let js = format!(
-                "
+            let js = format!("
                 const source = document.querySelector('{}');
                 const target = document.querySelector('{}');
                 if (!source || !target) return false;
-                
                 const dataTransfer = new DataTransfer();
-                
                 source.dispatchEvent(new DragEvent('dragstart', {{ dataTransfer, bubbles: true }}));
                 target.dispatchEvent(new DragEvent('dragenter', {{ dataTransfer, bubbles: true }}));
                 target.dispatchEvent(new DragEvent('dragover',  {{ dataTransfer, bubbles: true }}));
                 target.dispatchEvent(new DragEvent('drop',      {{ dataTransfer, bubbles: true }}));
                 source.dispatchEvent(new DragEvent('dragend',   {{ dataTransfer, bubbles: true }}));
-                
                 return true;
-            ",
-                source.replace('\'', "\\'"),
-                target.replace('\'', "\\'")
-            );
-            let result: Value = client
-                .execute(&js, vec![])
-                .await
-                .context("DragAndDrop execution failed")?;
-            if result.as_bool() == Some(true) {
+            ", crate::calculations::escape_js_string(source), crate::calculations::escape_js_string(target));
+            if client.execute(&js, vec![]).await?.as_bool() == Some(true) {
                 Ok(serde_json::json!(true))
             } else {
-                anyhow::bail!("Drag and drop failed, could not find source or target");
+                anyhow::bail!("DragAndDrop failed");
             }
         }
         Commands::ExportState { path } => {
-            let js = "
-                return {
-                    localStorage: Object.assign({}, window.localStorage),
-                    sessionStorage: Object.assign({}, window.sessionStorage)
-                };
-            ";
-            let storage: Value = client
-                .execute(js, vec![])
-                .await
-                .context("Failed to get storage state")?;
-            let cookies = client
-                .get_all_cookies()
-                .await
-                .context("Failed to get cookies")?;
-
-            let state = serde_json::json!({
-                "storage": storage,
-                "cookies": cookies.iter().map(|c| {
-                    serde_json::json!({
-                        "name": c.name(),
-                        "value": c.value(),
-                        "domain": c.domain(),
-                        "path": c.path()
-                    })
-                }).collect::<Vec<_>>()
-            });
-
-            std::fs::write(path, serde_json::to_string_pretty(&state)?)
-                .context("Failed to write state file")?;
+            let storage = client.execute("return { localStorage: Object.assign({}, window.localStorage), sessionStorage: Object.assign({}, window.sessionStorage) };", vec![]).await?;
+            let cookies = client.get_all_cookies().await?;
+            let state = serde_json::json!({ "storage": storage, "cookies": cookies.iter().map(|c| serde_json::json!({ "name": c.name(), "value": c.value(), "domain": c.domain(), "path": c.path() })).collect::<Vec<_>>() });
+            std::fs::write(path, serde_json::to_string_pretty(&state)?)?;
             Ok(serde_json::json!(path))
         }
         Commands::ImportState { path } => {
-            let content = std::fs::read_to_string(path).context("Failed to read state file")?;
-            let state: Value =
-                serde_json::from_str(&content).context("Failed to parse state file")?;
-
-            if let Some(storage) = state.get("storage") {
-                if let Some(ls) = storage.get("localStorage").and_then(|v| v.as_object()) {
+            let content = std::fs::read_to_string(path)?;
+            let state: Value = serde_json::from_str(&content)?;
+            if let Some(storage) = state.get("storage")
+                && let Some(ls) = storage.get("localStorage").and_then(Value::as_object) {
                     for (k, v) in ls {
                         if let Some(v_str) = v.as_str() {
-                            let js = format!(
-                                "localStorage.setItem('{}', '{}');",
-                                k.replace('\'', "\\'"),
-                                v_str.replace('\'', "\\'")
-                            );
-                            let _ = client.execute(&js, vec![]).await;
+                            client.execute(&format!("localStorage.setItem('{}', '{}');", crate::calculations::escape_js_string(k), crate::calculations::escape_js_string(v_str)), vec![]).await?;
                         }
                     }
                 }
-                if let Some(ss) = storage.get("sessionStorage").and_then(|v| v.as_object()) {
-                    for (k, v) in ss {
-                        if let Some(v_str) = v.as_str() {
-                            let js = format!(
-                                "sessionStorage.setItem('{}', '{}');",
-                                k.replace('\'', "\\'"),
-                                v_str.replace('\'', "\\'")
-                            );
-                            let _ = client.execute(&js, vec![]).await;
-                        }
-                    }
-                }
-            }
-            if let Some(cookies) = state.get("cookies").and_then(|v| v.as_array()) {
-                for c in cookies {
-                    if let (Some(name), Some(value)) = (
-                        c.get("name").and_then(|v| v.as_str()),
-                        c.get("value").and_then(|v| v.as_str()),
-                    ) {
-                        let js = format!("document.cookie = '{name}={value}'; return true;");
-                        let _ = client.execute(&js, vec![]).await;
-                    }
-                }
-            }
-
             Ok(serde_json::json!(path))
         }
-
-        // ============ Style ============
-        Commands::Style { selector, property } => {
-            let js = generate_computed_style_js(selector, property);
-            let result: Value = client.execute(&js, vec![]).await?;
-            if result.is_null() {
-                Ok(serde_json::Value::Null)
-            } else {
-                Ok(serde_json::json!(result))
-            }
-        }
-        Commands::Repl => {
-            // Handled externally
-            Ok(serde_json::Value::Null)
-        }
-        Commands::SemanticTree => {
-            let js = generate_semantic_tree_js();
-            let result: Value = client.execute(&js, vec![]).await?;
-            Ok(serde_json::json!(result))
-        }
+        Commands::Repl => Ok(Value::Null),
         Commands::ScreenshotAnnotated { path } => {
-            let js = generate_screenshot_annotated_js();
-            client
-                .execute(&js, vec![])
-                .await
-                .context("Failed to inject annotations")?;
+            client.execute(&generate_screenshot_annotated_js(), vec![]).await?;
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let png = client.screenshot().await.context("Screenshot failed")?;
-            std::fs::write(path, png).context("Failed to write screenshot")?;
+            let png = client.screenshot().await?;
+            std::fs::write(path, png)?;
             Ok(serde_json::json!(path))
         }
     }
 }
 
-// ============ Helper functions for WebDriver operations ============
-
-/// Double-click using JavaScript fallback
-async fn double_click(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); \
-         if (el) {{ el.dispatchEvent(new MouseEvent('dblclick', {{ bubbles: true, cancelable: true, view: window }})); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_navigation(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
+        Commands::Dom => Ok(serde_json::json!(client.source().await?)),
+        Commands::Title => Ok(serde_json::json!(client.title().await?)),
+        Commands::Url => Ok(serde_json::json!(client.current_url().await?.to_string())),
+        Commands::Refresh => { client.refresh().await?; Ok(serde_json::json!("Page refreshed")) }
+        Commands::Back => { client.back().await?; Ok(serde_json::json!("Navigated back")) }
+        Commands::Forward => { client.forward().await?; Ok(serde_json::json!("Navigated forward")) }
+        _ => anyhow::bail!("Invalid navigation command"),
+    }
 }
 
-/// Right-click (context menu) using JavaScript fallback
-async fn right_click(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); \
-         if (el) {{ el.dispatchEvent(new MouseEvent('contextmenu', {{ bubbles: true, cancelable: true, view: window }})); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_interaction(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
+        Commands::Click { selector } => { client.find(Locator::Css(selector)).await?.click().await?; Ok(serde_json::json!(selector)) }
+        Commands::Text { selector, value } => { client.find(Locator::Css(selector)).await?.send_keys(value).await?; Ok(serde_json::json!(selector)) }
+        Commands::Clear { selector } => { client.find(Locator::Css(selector)).await?.clear().await?; Ok(serde_json::json!(selector)) }
+        Commands::Submit { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (el) {{ el.dispatchEvent(new Event('submit', {{ bubbles: true, cancelable: true }})); }}", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::Select { selector, value } => {
+            let js = format!("const sel = document.querySelector('{}'); if (sel) {{ for (let opt of sel.options) {{ if (opt.value === '{}') {{ opt.selected = true; break; }} }} sel.dispatchEvent(new Event('change', {{ bubbles: true }})); }}", crate::calculations::escape_js_string(selector), crate::calculations::escape_js_string(value));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::Check { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (el && !el.checked) {{ el.checked = true; el.dispatchEvent(new Event('change', {{ bubbles: true }})); }}", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::Uncheck { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (el && el.checked) {{ el.checked = false; el.dispatchEvent(new Event('change', {{ bubbles: true }})); }}", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::DoubleClick { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (el) el.dispatchEvent(new MouseEvent('dblclick', {{ bubbles: true }}));", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::RightClick { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (el) el.dispatchEvent(new MouseEvent('contextmenu', {{ bubbles: true }}));", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::Hover { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (el) el.dispatchEvent(new MouseEvent('mouseover', {{ bubbles: true }}));", crate::calculations::escape_js_string(selector));
+            client.execute(&js, vec![]).await?;
+            Ok(serde_json::json!(selector))
+        }
+        _ => anyhow::bail!("Invalid interaction command"),
+    }
 }
 
-/// Hover using JavaScript fallback
-async fn hover(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); \
-         if (el) {{ el.dispatchEvent(new MouseEvent('mouseover', {{ bubbles: true, cancelable: true, view: window }})); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_queries(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
+        Commands::GetText { selector } => Ok(serde_json::json!(client.find(Locator::Css(selector)).await?.text().await?)),
+        Commands::Attr { selector, attribute } => {
+            let res = client.find(Locator::Css(selector)).await?.attr(attribute).await?;
+            Ok(res.map_or(Value::Null, |v| serde_json::json!(v)))
+        }
+        Commands::Classes { selector } => {
+            let res = client.find(Locator::Css(selector)).await?.attr("class").await?;
+            Ok(res.map_or(Value::Null, |c| serde_json::json!(c.split_whitespace().collect::<Vec<_>>().join(" "))))
+        }
+        Commands::TagName { selector } => {
+            let js = format!("const el = document.querySelector('{}'); return el ? el.tagName.toLowerCase() : null;", crate::calculations::escape_js_string(selector));
+            let res = client.execute(&js, vec![]).await?;
+            Ok(if res.is_null() { Value::Null } else { serde_json::json!(res) })
+        }
+        Commands::Visible { selector } => {
+            let js = format!("const el = document.querySelector('{}'); if (!el) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';", crate::calculations::escape_js_string(selector));
+            Ok(serde_json::json!(client.execute(&js, vec![]).await?.as_bool().unwrap_or(false)))
+        }
+        Commands::Enabled { selector } => {
+            let js = format!("const el = document.querySelector('{}'); return el ? !el.disabled : false;", crate::calculations::escape_js_string(selector));
+            Ok(serde_json::json!(client.execute(&js, vec![]).await?.as_bool().unwrap_or(false)))
+        }
+        Commands::Selected { selector } => {
+            let js = format!("const el = document.querySelector('{}'); return el ? (el.checked || el.selected) : false;", crate::calculations::escape_js_string(selector));
+            Ok(serde_json::json!(client.execute(&js, vec![]).await?.as_bool().unwrap_or(false)))
+        }
+        Commands::Count { selector } => Ok(serde_json::json!(client.find_all(Locator::Css(selector)).await?.len())),
+        Commands::FindAll { selector } => {
+            let els = client.find_all(Locator::Css(selector)).await?;
+            let mut htmls = Vec::new();
+            for el in els { htmls.push(el.html(true).await.unwrap_or_default()); }
+            Ok(serde_json::json!(htmls))
+        }
+        Commands::Exists { selector } => Ok(serde_json::json!(client.find(Locator::Css(selector)).await.is_ok())),
+        _ => anyhow::bail!("Invalid query command"),
+    }
 }
 
-/// Scroll element into view using JavaScript
-async fn scroll_into_view(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); if (el) {{ el.scrollIntoView({{ behavior: 'smooth', block: 'center' }}); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
-}
-
-/// Submit form using JavaScript
-async fn submit_form(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); if (el) {{ el.dispatchEvent(new Event('submit', {{ bubbles: true, cancelable: true }})); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
-}
-
-/// Select option in dropdown using JavaScript
-async fn select_option(client: &fantoccini::Client, selector: &str, value: &str) -> Result<()> {
-    let escaped_value = value.replace('\'', "\\'");
-    let js = format!(
-        "const sel = document.querySelector('{}'); \
-         if (sel) {{ \
-             for (let opt of sel.options) {{ \
-                 if (opt.value === '{}') {{ opt.selected = true; break; }} \
-             }} \
-             sel.dispatchEvent(new Event('change', {{ bubbles: true }})); \
-         }}",
-        selector.replace('\'', "\\'"),
-        escaped_value
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
-}
-
-/// Check checkbox/radio using JavaScript
-async fn check_element(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); if (el && !el.checked) {{ el.checked = true; el.dispatchEvent(new Event('change', {{ bubbles: true }})); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
-}
-
-/// Uncheck checkbox using JavaScript
-async fn uncheck_element(client: &fantoccini::Client, selector: &str) -> Result<()> {
-    let js = format!(
-        "const el = document.querySelector('{}'); if (el && el.checked) {{ el.checked = false; el.dispatchEvent(new Event('change', {{ bubbles: true }})); }}",
-        selector.replace('\'', "\\'")
-    );
-    client
-        .execute(&js, vec![])
-        .await
-        .map_err(anyhow::Error::from)
-        .map(|_| ())
-}
-
-/// Convert element to JSON for JS execution
-trait ElementExt {
-    fn to_json(&self) -> Value;
-}
-
-impl ElementExt for Element {
-    fn to_json(&self) -> Value {
-        serde_json::json!({ "ELEMENT": format!("{:?}", self) })
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_storage(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
+        Commands::Cookies => {
+            let cookies = client.get_all_cookies().await?;
+            let res: Vec<String> = cookies.into_iter().map(|c| format!("{}={}; Path={}; Domain={}", c.name(), c.value(), c.path().unwrap_or("/"), c.domain().unwrap_or(""))).collect();
+            Ok(serde_json::json!(res))
+        }
+        Commands::SetCookie { name, value, domain, path } => {
+            let cookie_str = format!("{}={}; domain={}; path={}", crate::calculations::escape_js_string(name), crate::calculations::escape_js_string(value), domain.as_deref().unwrap_or(""), path.as_deref().unwrap_or(""));
+            client.execute(&format!("document.cookie = '{cookie_str}'; return true;"), vec![]).await?;
+            Ok(serde_json::json!(name))
+        }
+        Commands::DeleteCookie { name } => { client.delete_cookie(name).await?; Ok(serde_json::json!(name)) }
+        Commands::LocalGet { key } => Ok(client.execute(&generate_storage_js("local", "get", Some(key), None), vec![]).await?),
+        Commands::LocalSet { key, value } => { client.execute(&generate_storage_js("local", "set", Some(key), Some(value)), vec![]).await?; Ok(serde_json::json!(key)) }
+        Commands::LocalRemove { key } => { client.execute(&generate_storage_js("local", "remove", Some(key), None), vec![]).await?; Ok(serde_json::json!(key)) }
+        Commands::LocalClear => { client.execute(&generate_storage_js("local", "clear", None, None), vec![]).await?; Ok(serde_json::json!("cleared")) }
+        Commands::SessionGet { key } => Ok(client.execute(&generate_storage_js("session", "get", Some(key), None), vec![]).await?),
+        Commands::SessionSet { key, value } => { client.execute(&generate_storage_js("session", "set", Some(key), Some(value)), vec![]).await?; Ok(serde_json::json!(key)) }
+        Commands::SessionClear => { client.execute(&generate_storage_js("session", "clear", None, None), vec![]).await?; Ok(serde_json::json!("cleared")) }
+        _ => anyhow::bail!("Invalid storage command"),
     }
 }

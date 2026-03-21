@@ -10,6 +10,7 @@
 
 use clap::{Parser, Subcommand};
 use std::time::Duration;
+use url::Url;
 
 /// CLI argument parser
 #[derive(Parser, Debug)]
@@ -44,415 +45,135 @@ pub struct Cli {
     pub command: Commands,
 }
 
-/// All available commands - 50+ commands from SPEC.md
+/// All available commands
 #[derive(Subcommand, Debug, Clone)]
 pub enum Commands {
     // ============ Navigation Commands ============
-    /// Get the full HTML of the page
-    Dom,
-    /// Get page title
-    Title,
-    /// Get current URL
-    Url,
-    /// Refresh the page
-    Refresh,
-    /// Go back in history
-    Back,
-    /// Go forward in history
-    Forward,
+    Dom, Title, Url, Refresh, Back, Forward,
 
     // ============ Element Interaction ============
-    /// Click an element by CSS selector
-    Click {
-        /// The CSS selector to click
-        selector: String,
-    },
-    /// Double-click an element
-    DoubleClick {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Right-click (context menu)
-    RightClick {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Hover over element
-    Hover {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Set input value
-    Text {
-        /// The CSS selector
-        selector: String,
-        /// The value to set
-        value: String,
-    },
-    /// Clear input field
-    Clear {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Submit form
-    Submit {
-        /// The CSS selector (form)
-        selector: String,
-    },
-    /// Select dropdown option
-    Select {
-        /// The CSS selector (select element)
-        selector: String,
-        /// The option value to select
-        value: String,
-    },
-    /// Check checkbox/radio
-    Check {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Uncheck checkbox
-    Uncheck {
-        /// The CSS selector
-        selector: String,
-    },
+    Click { selector: String },
+    DoubleClick { selector: String },
+    RightClick { selector: String },
+    Hover { selector: String },
+    Text { selector: String, value: String },
+    Clear { selector: String },
+    Submit { selector: String },
+    Select { selector: String, value: String },
+    Check { selector: String },
+    Uncheck { selector: String },
 
     // ============ Element Queries ============
-    /// Get element text content
-    GetText {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Get attribute value
-    Attr {
-        /// The CSS selector
-        selector: String,
-        /// The attribute name
-        attribute: String,
-    },
-    /// Get CSS classes
-    Classes {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Get element tag name
-    TagName {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Check if visible
-    Visible {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Check if enabled
-    Enabled {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Check if selected
-    Selected {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Count matching elements
-    Count {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Get all element HTML
-    FindAll {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Check if element exists
-    Exists {
-        /// The CSS selector
-        selector: String,
-    },
+    GetText { selector: String },
+    Attr { selector: String, attribute: String },
+    Classes { selector: String },
+    TagName { selector: String },
+    Visible { selector: String },
+    Enabled { selector: String },
+    Selected { selector: String },
+    Count { selector: String },
+    FindAll { selector: String },
+    Exists { selector: String },
 
     // ============ JavaScript & Execution ============
-    /// Execute JavaScript
-    Eval {
-        /// JavaScript expression to evaluate
-        js: String,
-    },
-    /// Inject CSS into page
-    InjectCss {
-        /// CSS to inject
-        css: String,
-    },
+    Eval { js: String },
+    InjectCss { css: String },
 
     // ============ Screenshot ============
-    /// Take full-page screenshot
-    Screenshot {
-        /// Path to save the screenshot
-        path: String,
-    },
-    /// Take element screenshot
-    ElementScreenshot {
-        /// The CSS selector
-        selector: String,
-        /// Path to save the screenshot
-        path: String,
-    },
+    Screenshot { path: String },
+    ElementScreenshot { selector: String, path: String },
 
     // ============ Viewport & Scrolling ============
-    /// Set viewport size
-    Viewport {
-        /// Width in pixels
-        width: u32,
-        /// Height in pixels
-        height: u32,
-    },
-    /// Scroll element into view
-    Scroll {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Scroll by pixels
-    ScrollBy {
-        /// X offset
-        x: i32,
-        /// Y offset
-        y: i32,
-    },
+    Viewport { width: u32, height: u32 },
+    Scroll { selector: String },
+    ScrollBy { x: i32, y: i32 },
 
     // ============ Keyboard ============
-    /// Press keyboard key
-    Key {
-        /// Key to press (e.g., Enter, Escape, Tab)
-        key: String,
-    },
-    /// Press key combination (e.g., Control+a)
-    KeyCombo {
-        /// Key combination (e.g., Control+Shift+Delete)
-        combo: String,
-    },
+    Key { key: String },
+    KeyCombo { combo: String },
 
     // ============ Storage ============
-    /// Get all cookies
     Cookies,
-    /// Set cookie
-    SetCookie {
-        /// Cookie name
-        name: String,
-        /// Cookie value
-        value: String,
-        /// Domain (optional)
-        domain: Option<String>,
-        /// Path (optional)
-        path: Option<String>,
-    },
-    /// Delete cookie
-    DeleteCookie {
-        /// Cookie name
-        name: String,
-    },
-    /// Get localStorage item
-    LocalGet {
-        /// Key
-        key: String,
-    },
-    /// Set localStorage item
-    LocalSet {
-        /// Key
-        key: String,
-        /// Value
-        value: String,
-    },
-    /// Remove localStorage item
-    LocalRemove {
-        /// Key
-        key: String,
-    },
-    /// Clear localStorage
+    SetCookie { name: String, value: String, domain: Option<String>, path: Option<String> },
+    DeleteCookie { name: String },
+    LocalGet { key: String },
+    LocalSet { key: String, value: String },
+    LocalRemove { key: String },
     LocalClear,
-    /// Get sessionStorage item
-    SessionGet {
-        /// Key
-        key: String,
-    },
-    /// Set sessionStorage item
-    SessionSet {
-        /// Key
-        key: String,
-        /// Value
-        value: String,
-    },
-    /// Clear sessionStorage
+    SessionGet { key: String },
+    SessionSet { key: String, value: String },
     SessionClear,
 
     // ============ Console ============
-    /// Get all console messages
     Console,
-    /// Get console messages by type (log, warn, error, info, debug)
-    ConsoleLog {
-        /// Console type
-        #[arg(default_value = "log")]
-        r#type: String,
-    },
+    ConsoleLog { #[arg(default_value = "log")] r#type: String },
 
     // ============ Waiting ============
-    /// Wait for element to appear
-    Wait {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Wait for element to disappear
-    WaitGone {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Wait for navigation
+    Wait { selector: String },
+    WaitGone { selector: String },
     WaitNav,
-    /// Wait for Dioxus hydration
     WaitHydration,
 
     // ============ Dioxus-Specific ============
-    /// Get Dioxus internal state
     DioxusState,
-    /// Click Dioxus element by data-target attribute
-    DioxusClick {
-        /// The target ID
-        target: String,
-    },
-    /// Extract a semantic/accessibility tree of interactable elements
+    DioxusClick { target: String },
     SemanticTree,
 
     // ============ AI Agent Extended ============
-    /// Upload a file to a file input
-    Upload {
-        /// The CSS selector (must be input[type="file"])
-        selector: String,
-        /// Absolute path to the local file
-        path: String,
-    },
-    /// Fill multiple inputs from a JSON mapping of selector -> value
-    FillForm {
-        /// JSON string mapping CSS selectors to values (e.g., '{"#username": "admin"}')
-        json_data: String,
-    },
-    /// Get intercepted network requests
+    Upload { selector: String, path: String },
+    FillForm { json_data: String },
     NetworkLogs,
-    /// Assert that an element contains specific text
-    AssertText {
-        /// The CSS selector
-        selector: String,
-        /// The expected text
-        expected: String,
-    },
-    /// Assert that an element exists and is visible
-    AssertVisible {
-        /// The CSS selector
-        selector: String,
-    },
-    /// Assert that an element exists
-    AssertExists {
-        /// The CSS selector
-        selector: String,
-    },
+    AssertText { selector: String, expected: String },
+    AssertVisible { selector: String },
+    AssertExists { selector: String },
 
     // ============ AI Agent Advanced Capabilities ============
-    /// Fuzzy click an element by matching human-readable text on screen
-    FuzzyClick {
-        /// The exact or partial text of the button/link to click
-        text: String,
-    },
-    /// Wait for all background network requests (fetch/XHR) to settle
+    FuzzyClick { text: String },
     WaitNetworkIdle,
-    /// Scroll down repeatedly until an element containing text is found (great for virtual lists)
-    ScrollToText {
-        /// The CSS selector of the scrollable container
-        container: String,
-        /// The text to look for
-        text: String,
-    },
-    /// Extract an HTML table into clean, token-efficient JSON array
-    ExtractTable {
-        /// The CSS selector of the table
-        selector: String,
-    },
+    ScrollToText { container: String, text: String },
+    ExtractTable { selector: String },
 
     // ============ "God-Tier" Playwright Features ============
-    /// Mock a network route to return a fake JSON response
-    MockRoute {
-        /// The URL pattern to match (e.g. "api/users")
-        url_pattern: String,
-        /// The fake JSON response to return
-        response_json: String,
-        /// The HTTP status code
-        #[arg(default_value = "200")]
-        status: u16,
-    },
-    /// Deep click an element inside a Shadow DOM using ">>" combinator syntax
-    ShadowClick {
-        /// The shadow DOM selector (e.g. "my-component >> .internal-btn")
-        selector: String,
-    },
-    /// Synthetically perform drag and drop between two elements
-    DragAndDrop {
-        /// The CSS selector of the element to drag
-        source: String,
-        /// The CSS selector of the drop target
-        target: String,
-    },
-    /// Export all browser state (cookies, localStorage) to a JSON file
-    ExportState {
-        /// The file path to save the state to
-        path: String,
-    },
-    /// Import browser state from a JSON file
-    ImportState {
-        /// The file path to load the state from
-        path: String,
-    },
+    MockRoute { url_pattern: String, response_json: String, #[arg(default_value = "200")] status: u16 },
+    ShadowClick { selector: String },
+    DragAndDrop { source: String, target: String },
+    ExportState { path: String },
+    ImportState { path: String },
 
-    // ============ Style ============
-    /// Get computed style property
-    Style {
-        /// The CSS selector
-        selector: String,
-        /// CSS property name
-        property: String,
-    },
-
-    // ============ Interactive ============
-    /// Start an interactive REPL session
+    // ============ Style & Interactive ============
+    Style { selector: String, property: String },
     Repl,
+    ScreenshotAnnotated { path: String },
+}
 
-    // ============ Agent Vision ============
-    /// Take screenshot with annotated bounding boxes for interactable elements
-    ScreenshotAnnotated {
-        /// Path to save the screenshot
-        path: String,
-    },
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserMode {
+    Headless,
+    Headed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputFormat {
+    Json,
+    Standard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WaitStrategy {
+    Auto,
+    Manual,
 }
 
 /// Runtime configuration after validation
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub url: String,
+    pub url: Url,
     pub timeout: Duration,
-    pub webdriver_url: String,
-    pub no_headless: bool,
-    pub json: bool,
-    pub auto_wait: bool,
+    pub webdriver_url: Url,
+    pub mode: BrowserMode,
+    pub output: OutputFormat,
+    pub wait: WaitStrategy,
     pub command: Commands,
-}
-
-impl From<Cli> for Config {
-    fn from(cli: Cli) -> Self {
-        Self {
-            url: cli.url,
-            timeout: Duration::from_secs(cli.timeout),
-            webdriver_url: cli.webdriver_url,
-            no_headless: cli.no_headless,
-            json: cli.json,
-            auto_wait: cli.auto_wait,
-            command: cli.command,
-        }
-    }
 }
 
 /// JSON Output format for AI agents

@@ -19,3 +19,4 @@ rustyline = "14.0"
 serde = { version = "1.0.228", features = ["derive"] }
 scraper = "0.26.0"
 image = { version = "0.25.10", features = ["png"] }
+thiserror = "2.0.18"

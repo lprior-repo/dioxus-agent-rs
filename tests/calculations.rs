@@ -32,7 +32,7 @@ fn test_precondition_empty_url_returns_error() {
     let cli = make_cli("", 10, Commands::Dom);
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("URL"));
+    assert!(result.unwrap_err().to_string().contains("URL"));
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn test_precondition_zero_timeout_returns_error() {
     let cli = make_cli("http://localhost:8080", 0, Commands::Dom);
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("timeout"));
+    assert!(result.unwrap_err().to_string().to_lowercase().contains("timeout"));
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn test_precondition_empty_selector_returns_error() {
     );
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("selector"));
+    assert!(result.unwrap_err().to_string().contains("selector"));
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn test_precondition_zero_viewport_returns_error() {
     );
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("width"));
+    assert!(result.unwrap_err().to_string().contains("width"));
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn test_precondition_dangerous_js_returns_error() {
     );
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("dangerous"));
+    assert!(result.unwrap_err().to_string().contains("dangerous"));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn test_precondition_invalid_console_type_returns_error() {
     );
     let result = validate_inputs(&cli);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("console type"));
+    assert!(result.unwrap_err().to_string().contains("console type"));
 }
 
 // ============================================================================
