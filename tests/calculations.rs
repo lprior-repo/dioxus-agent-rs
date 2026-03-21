@@ -9,7 +9,7 @@ use dioxus_agent_rs::calculations::{
     generate_wait_gone_js, validate_inputs,
 };
 
-use dioxus_agent_rs::data::{Cli, Commands};
+use dioxus_agent_rs::data::{Cli, Commands, Engine};
 
 fn make_cli(url: &str, timeout: u64, cmd: Commands) -> Cli {
     Cli {
@@ -19,6 +19,7 @@ fn make_cli(url: &str, timeout: u64, cmd: Commands) -> Cli {
         json: false,
         auto_wait: false,
         trace: None,
+        engine: Engine::Cdp,
         command: cmd,
     }
 }

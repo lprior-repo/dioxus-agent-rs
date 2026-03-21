@@ -41,8 +41,20 @@ pub struct Cli {
     #[arg(long)]
     pub trace: Option<String>,
 
+    /// The browser automation engine to use
+    #[arg(long, value_enum, default_value_t = Engine::Cdp)]
+    pub engine: Engine,
+
     #[command(subcommand)]
     pub command: Commands,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, PartialEq, Eq)]
+pub enum Engine {
+    /// Pure CDP via chromiumoxide (Zero-setup, Chrome only)
+    Cdp,
+    /// Dual-Driver: W3C `WebDriver` (fantoccini) + CDP (Requires chromedriver on port 4444)
+    Dual,
 }
 
 /// All available commands
@@ -325,6 +337,7 @@ pub struct Config {
     pub output: OutputFormat,
     pub wait: WaitStrategy,
     pub trace: Option<String>,
+    pub engine: Engine,
     pub command: Commands,
 }
 

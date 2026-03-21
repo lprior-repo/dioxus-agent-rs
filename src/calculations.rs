@@ -71,6 +71,7 @@ pub fn validate_inputs(cli: &Cli) -> Result<Config, ValidationError> {
         output,
         wait,
         trace: cli.trace.clone(),
+        engine: cli.engine.clone(),
         command: cli.command.clone(),
     })
 }
@@ -660,7 +661,6 @@ pub fn generate_extract_table_js(selector: &str) -> String {
     )
 }
 
-
 #[derive(serde::Serialize)]
 pub struct TracePayload<'a> {
     pub command: String,
@@ -698,9 +698,9 @@ pub enum PixelDiffError {
 }
 
 /// Computes the pixel difference percentage between two images.
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns `PixelDiffError` if the images cannot be parsed or if dimensions do not match.
 pub fn calculate_pixel_diff(img1_buf: &[u8], img2_buf: &[u8]) -> Result<f64, PixelDiffError> {
     let img1 = image::load_from_memory(img1_buf)?;

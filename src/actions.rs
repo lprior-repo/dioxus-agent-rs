@@ -19,10 +19,11 @@ use crate::calculations::{
     generate_screenshot_annotated_js, generate_scroll_to_text_js, generate_semantic_tree_js,
     generate_storage_js, generate_wait_element_js, generate_wait_gone_js, generate_wait_stable_js,
 };
-use crate::data::{BrowserMode, Commands, Config, OutputFormat, WaitStrategy};
+use crate::data::{BrowserMode, Commands, Config, Engine, OutputFormat, WaitStrategy};
 use anyhow::{Context, Result};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
+use fantoccini::{ClientBuilder, Locator};
 use futures::StreamExt;
 use serde_json::Value;
 
@@ -32,6 +33,14 @@ use serde_json::Value;
 ///
 /// Returns an error if the browser fails to launch, navigate, or if the command execution fails.
 pub async fn execute_command(config: Config) -> Result<()> {
+    if config.engine == Engine::Dual {
+        execute_dual_engine(config).await
+    } else {
+        execute_cdp_engine(config).await
+    }
+}
+
+async fn execute_cdp_engine(config: Config) -> Result<()> {
     let mut builder = BrowserConfig::builder();
     if config.mode == BrowserMode::Headed {
         builder = builder.with_head();
@@ -85,7 +94,76 @@ pub async fn execute_command(config: Config) -> Result<()> {
         }
 
     let _ = browser.close().await;
+    print_output(&config, result)
+}
 
+async fn execute_dual_engine(config: Config) -> Result<()> {
+    let mut caps = serde_json::Map::new();
+    let mut args = vec!["no-sandbox", "disable-dev-shm-usage", "disable-gpu"];
+    if config.mode == BrowserMode::Headless {
+        args.push("headless");
+    }
+    caps.insert("goog:chromeOptions".to_string(), serde_json::json!({ "args": args }));
+
+    // 1. Connect WebDriver
+    let mut client = ClientBuilder::native()
+        .capabilities(caps)
+        .connect("http://localhost:4444")
+        .await.context("Failed to connect to ChromeDriver. Make sure it is running on port 4444")?;
+
+    // 2. Extract CDP WebSocket URL
+    let session_caps = client.capabilities().cloned().unwrap_or_default();
+    let ws_url = session_caps.get("goog:chromeOptions")
+        .and_then(|opts| opts.get("debuggerAddress"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Failed to find CDP debuggerAddress from WebDriver"))?;
+
+    let req_url = format!("http://{ws_url}/json/version");
+    let resp: Value = reqwest::get(&req_url).await?.json().await?;
+    let cdp_ws = resp.get("webSocketDebuggerUrl")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Failed to extract webSocketDebuggerUrl"))?;
+
+    // 3. Connect CDP Shadow Session
+    let (browser, mut handler) = chromiumoxide::browser::Browser::connect(cdp_ws).await?;
+    let _handle = tokio::task::spawn(async move {
+        while let Some(h) = handler.next().await {
+            if h.is_err() { break; }
+        }
+    });
+
+    // We only have 1 tab usually, get it
+    let pages = browser.pages().await?;
+    let page = pages.first().cloned().ok_or_else(|| anyhow::anyhow!("No pages found in CDP"))?;
+
+    // 4. Navigate using WebDriver
+    client.goto(config.url.as_str()).await?;
+    
+    inject_console_capture(&page).await?;
+
+    if config.wait == WaitStrategy::Auto {
+        let js = generate_hydration_wait_js();
+        let _ = page.evaluate(js).await;
+    }
+
+    let result = match tokio::time::timeout(
+        config.timeout,
+        dispatch_dual(&mut client, &page, &config.command),
+    ).await {
+        Ok(res) => res,
+        Err(_) => Err(anyhow::anyhow!("Command execution timed out after {:?}", config.timeout)),
+    };
+
+    if let Some(trace_dir) = &config.trace
+        && let Err(e) = execute_trace(&page, trace_dir, &config, result.is_ok()).await {
+            eprintln!("Warning: Failed to execute trace: {e}");
+        }
+
+    let _ = client.close().await;
+    print_output(&config, result)
+}
+
+fn print_output(config: &Config, result: Result<Value>) -> Result<()> {
     if config.output == OutputFormat::Json {
         let (success, data, error) = match result {
             Ok(v) => (true, v, None),
@@ -119,6 +197,26 @@ pub async fn execute_command(config: Config) -> Result<()> {
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+async fn dispatch_dual(client: &mut fantoccini::Client, page: &Page, command: &Commands) -> Result<Value> {
+    match command {
+        // Core Interactions routed to WebDriver (fantoccini) for W3C stability
+        Commands::Click { selector } => {
+            client.find(Locator::Css(selector)).await?.click().await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::Text { selector, value } => {
+            client.find(Locator::Css(selector)).await?.send_keys(value).await?;
+            Ok(serde_json::json!(selector))
+        }
+        Commands::Clear { selector } => {
+            client.find(Locator::Css(selector)).await?.clear().await?;
+            Ok(serde_json::json!(selector))
+        }
+        // Everything else falls back to CDP (chromiumoxide)
+        _ => dispatch_command(page, command).await,
     }
 }
 
