@@ -24,6 +24,11 @@ use fantoccini::{Client, ClientBuilder, Locator};
 use serde_json::Value;
 use std::time::Duration;
 
+/// Executes a command.
+///
+/// # Errors
+///
+/// Returns an error if the webdriver fails to connect, navigate, or execute the command.
 pub async fn execute_command(config: Config) -> Result<()> {
     let mut caps = serde_json::Map::new();
     let mut args = vec!["no-sandbox", "disable-dev-shm-usage", "disable-gpu"];
@@ -219,15 +224,23 @@ async fn inject_console_capture(client: &mut Client) -> Result<()> {
 /// Command Dispatcher
 async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Value> {
     match command {
-        Commands::Dom | Commands::Title | Commands::Url | Commands::Refresh | Commands::Back | Commands::Forward => {
-            handle_navigation(client, command).await
-        }
-        Commands::Click { .. } | Commands::DoubleClick { .. } | Commands::RightClick { .. } | Commands::Hover { .. } | Commands::Text { .. } | Commands::Clear { .. } | Commands::Submit { .. } | Commands::Select { .. } | Commands::Check { .. } | Commands::Uncheck { .. } => {
-            handle_interaction(client, command).await
-        }
-        Commands::GetText { .. } | Commands::Attr { .. } | Commands::Classes { .. } | Commands::TagName { .. } | Commands::Visible { .. } | Commands::Enabled { .. } | Commands::Selected { .. } | Commands::Count { .. } | Commands::FindAll { .. } | Commands::Exists { .. } => {
-            handle_queries(client, command).await
-        }
+        Commands::Dom | Commands::Title | Commands::Url | Commands::Refresh | Commands::Back | Commands::Forward => handle_navigation(client, command).await,
+        Commands::Click { .. } | Commands::DoubleClick { .. } | Commands::RightClick { .. } | Commands::Hover { .. } | Commands::Text { .. } | Commands::Clear { .. } | Commands::Submit { .. } | Commands::Select { .. } | Commands::Check { .. } | Commands::Uncheck { .. } => handle_interaction(client, command).await,
+        Commands::GetText { .. } | Commands::Attr { .. } | Commands::Classes { .. } | Commands::TagName { .. } | Commands::Visible { .. } | Commands::Enabled { .. } | Commands::Selected { .. } | Commands::Count { .. } | Commands::FindAll { .. } | Commands::Exists { .. } => handle_queries(client, command).await,
+        Commands::Cookies | Commands::SetCookie { .. } | Commands::DeleteCookie { .. } | Commands::LocalGet { .. } | Commands::LocalSet { .. } | Commands::LocalRemove { .. } | Commands::LocalClear | Commands::SessionGet { .. } | Commands::SessionSet { .. } | Commands::SessionClear => handle_storage(client, command).await,
+        Commands::Eval { .. } | Commands::InjectCss { .. } | Commands::Screenshot { .. } | Commands::ElementScreenshot { .. } | Commands::ScreenshotAnnotated { .. } => handle_eval_screenshot(client, command).await,
+        Commands::Viewport { .. } | Commands::Scroll { .. } | Commands::ScrollBy { .. } | Commands::Key { .. } | Commands::KeyCombo { .. } => handle_viewport_keyboard(client, command).await,
+        Commands::Console | Commands::ConsoleLog { .. } | Commands::Wait { .. } | Commands::WaitGone { .. } | Commands::WaitNav | Commands::WaitHydration => handle_console_wait(client, command).await,
+        Commands::DioxusState | Commands::DioxusClick { .. } | Commands::SemanticTree | Commands::Style { .. } => handle_dioxus_style(client, command).await,
+        Commands::Upload { .. } | Commands::FillForm { .. } | Commands::NetworkLogs | Commands::AssertText { .. } | Commands::AssertVisible { .. } | Commands::AssertExists { .. } | Commands::FuzzyClick { .. } | Commands::WaitNetworkIdle | Commands::ScrollToText { .. } | Commands::ExtractTable { .. } => handle_ai_extended(client, command).await,
+        Commands::MockRoute { .. } | Commands::ShadowClick { .. } | Commands::DragAndDrop { .. } | Commands::ExportState { .. } | Commands::ImportState { .. } => handle_god_tier(client, command).await,
+        Commands::Repl => Ok(Value::Null),
+    }
+}
+
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_eval_screenshot(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
         Commands::Eval { js } => {
             let res = client.execute(js, vec![]).await?;
             Ok(serde_json::json!(res))
@@ -251,6 +264,20 @@ async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Val
             std::fs::write(path, png)?;
             Ok(serde_json::json!(path))
         }
+        Commands::ScreenshotAnnotated { path } => {
+            client.execute(&generate_screenshot_annotated_js(), vec![]).await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let png = client.screenshot().await?;
+            std::fs::write(path, png)?;
+            Ok(serde_json::json!(path))
+        }
+        _ => anyhow::bail!("Invalid eval/screenshot command"),
+    }
+}
+
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_viewport_keyboard(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
         Commands::Viewport { width, height } => {
             client.set_window_size(*width, *height).await?;
             Ok(serde_json::json!(format!("{width} {height}")))
@@ -272,9 +299,13 @@ async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Val
             client.execute(&generate_keycombo_js(combo), vec![]).await?;
             Ok(serde_json::json!(combo))
         }
-        Commands::Cookies | Commands::SetCookie { .. } | Commands::DeleteCookie { .. } | Commands::LocalGet { .. } | Commands::LocalSet { .. } | Commands::LocalRemove { .. } | Commands::LocalClear | Commands::SessionGet { .. } | Commands::SessionSet { .. } | Commands::SessionClear => {
-            handle_storage(client, command).await
-        }
+        _ => anyhow::bail!("Invalid viewport/keyboard command"),
+    }
+}
+
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_console_wait(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
         Commands::Console => {
             let res = client.execute(&generate_console_js(None), vec![]).await?;
             Ok(serde_json::json!(res))
@@ -299,6 +330,13 @@ async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Val
             client.execute(&generate_hydration_wait_js(), vec![]).await?;
             Ok(serde_json::json!("hydrated"))
         }
+        _ => anyhow::bail!("Invalid console/wait command"),
+    }
+}
+
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_dioxus_style(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
         Commands::DioxusState => {
             let res = client.execute(&generate_dioxus_state_js(), vec![]).await?;
             Ok(serde_json::json!(res))
@@ -319,6 +357,13 @@ async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Val
             let res = client.execute(&generate_computed_style_js(selector, property), vec![]).await?;
             Ok(if res.is_null() { Value::Null } else { serde_json::json!(res) })
         }
+        _ => anyhow::bail!("Invalid dioxus/style command"),
+    }
+}
+
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_ai_extended(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
         Commands::Upload { selector, path } => {
             let el = client.find(Locator::Css(selector)).await?;
             let abs_path = std::fs::canonicalize(path)?;
@@ -391,6 +436,13 @@ async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Val
             if res.is_null() { anyhow::bail!("Table not found: {selector}"); }
             Ok(res)
         }
+        _ => anyhow::bail!("Invalid AI extended command"),
+    }
+}
+
+#[allow(clippy::needless_pass_by_ref_mut)]
+async fn handle_god_tier(client: &mut Client, command: &Commands) -> Result<Value> {
+    match command {
         Commands::MockRoute { url_pattern, response_json, status } => {
             let js = format!(
                 "window.__mock_routes = window.__mock_routes || []; window.__mock_routes.push({{ pattern: '{}', response: '{}', status: {} }}); return true;",
@@ -459,16 +511,10 @@ async fn dispatch_command(client: &mut Client, command: &Commands) -> Result<Val
                 }
             Ok(serde_json::json!(path))
         }
-        Commands::Repl => Ok(Value::Null),
-        Commands::ScreenshotAnnotated { path } => {
-            client.execute(&generate_screenshot_annotated_js(), vec![]).await?;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            let png = client.screenshot().await?;
-            std::fs::write(path, png)?;
-            Ok(serde_json::json!(path))
-        }
+        _ => anyhow::bail!("Invalid god tier command"),
     }
 }
+
 
 #[allow(clippy::needless_pass_by_ref_mut)]
 async fn handle_navigation(client: &mut Client, command: &Commands) -> Result<Value> {

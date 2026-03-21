@@ -35,9 +35,15 @@ pub enum ValidationError {
     InvalidCookieName,
 }
 
+/// Validates CLI inputs and produces a `Config` object.
+///
+/// # Errors
+///
+/// Returns `ValidationError` if the URL is invalid, timeout is zero, or if the command validation fails.
 pub fn validate_inputs(cli: &Cli) -> Result<Config, ValidationError> {
     let url = Url::parse(&cli.url).map_err(ValidationError::InvalidUrl)?;
-    let webdriver_url = Url::parse(&cli.webdriver_url).map_err(ValidationError::InvalidWebDriverUrl)?;
+    let webdriver_url =
+        Url::parse(&cli.webdriver_url).map_err(ValidationError::InvalidWebDriverUrl)?;
 
     if cli.timeout == 0 {
         return Err(ValidationError::ZeroTimeout);
@@ -103,7 +109,10 @@ fn validate_text(t: &str) -> Result<(), ValidationError> {
 
 fn validate_storage_key(key: &str) -> Result<(), ValidationError> {
     validate_non_empty(key, "key")?;
-    let first_char = key.chars().next().ok_or(ValidationError::EmptyField("key"))?;
+    let first_char = key
+        .chars()
+        .next()
+        .ok_or(ValidationError::EmptyField("key"))?;
     if !first_char.is_ascii_alphabetic() && first_char != '_' {
         return Err(ValidationError::InvalidStorageKey);
     }
@@ -115,6 +124,7 @@ fn validate_storage_key(key: &str) -> Result<(), ValidationError> {
 
 fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
     match cmd {
+        // Simple selectors
         Commands::Click { selector }
         | Commands::DoubleClick { selector }
         | Commands::RightClick { selector }
@@ -138,41 +148,42 @@ fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
         | Commands::Wait { selector }
         | Commands::WaitGone { selector } => validate_selector(selector),
 
-        Commands::ElementScreenshot { selector, path } => {
+        // Selector + Path
+        Commands::ElementScreenshot { selector, path } | Commands::Upload { selector, path } => {
             validate_selector(selector)?;
             validate_path(path)
         }
 
+        // Selector + Value
         Commands::Text { selector, value } | Commands::Select { selector, value } => {
             validate_selector(selector)?;
             validate_value(value)
         }
 
-        Commands::Upload { selector, path } => {
-            validate_selector(selector)?;
-            validate_path(path)
-        }
-
+        // Other Selector pairs
         Commands::AssertText { selector, expected } => {
             validate_selector(selector)?;
             validate_non_empty(expected, "expected")
         }
-
-        Commands::Attr { selector, attribute } => {
+        Commands::Attr {
+            selector,
+            attribute,
+        } => {
             validate_selector(selector)?;
             validate_non_empty(attribute, "attribute")
         }
-
         Commands::Style { selector, property } => {
             validate_selector(selector)?;
             validate_non_empty(property, "property")
         }
 
+        // Path only
         Commands::Screenshot { path }
         | Commands::ScreenshotAnnotated { path }
         | Commands::ExportState { path }
         | Commands::ImportState { path } => validate_path(path),
 
+        // Other simple validations
         Commands::Viewport { width, height } => {
             if *width == 0 || *height == 0 {
                 Err(ValidationError::ZeroViewport)
@@ -180,9 +191,7 @@ fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
                 Ok(())
             }
         }
-
         Commands::Key { key } | Commands::KeyCombo { combo: key } => validate_key(key),
-
         Commands::SetCookie { name, value, .. } => {
             validate_non_empty(name, "name")?;
             validate_value(value)?;
@@ -192,18 +201,22 @@ fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
                 Ok(())
             }
         }
-
         Commands::DeleteCookie { name } => validate_non_empty(name, "name"),
 
+        // Storage and rest
+        _ => validate_command_rest(cmd),
+    }
+}
+
+fn validate_command_rest(cmd: &Commands) -> Result<(), ValidationError> {
+    match cmd {
         Commands::LocalGet { key }
         | Commands::LocalRemove { key }
         | Commands::SessionGet { key } => validate_storage_key(key),
-
         Commands::LocalSet { key, value } | Commands::SessionSet { key, value } => {
             validate_storage_key(key)?;
             validate_value(value)
         }
-
         Commands::ConsoleLog { r#type } => {
             if matches!(r#type.as_str(), "log" | "warn" | "error" | "info" | "debug") {
                 Ok(())
@@ -211,9 +224,7 @@ fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
                 Err(ValidationError::InvalidConsoleType)
             }
         }
-
         Commands::DioxusClick { target } => validate_non_empty(target, "target"),
-
         Commands::Eval { js } => {
             validate_non_empty(js, "js")?;
             let dangerous = ["eval(", "Function(", "setTimeout", "setInterval"];
@@ -223,53 +234,31 @@ fn validate_command(cmd: &Commands) -> Result<(), ValidationError> {
                 Ok(())
             }
         }
-
         Commands::InjectCss { css } => validate_non_empty(css, "css"),
-
         Commands::FillForm { json_data } => {
             validate_non_empty(json_data, "json_data")?;
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json_data)
                 .map_err(ValidationError::InvalidJson)?;
             Ok(())
         }
-
         Commands::FuzzyClick { text } => validate_text(text),
-
         Commands::ScrollToText { container, text } => {
             validate_selector(container)?;
             validate_text(text)
         }
-
-        Commands::MockRoute { url_pattern, response_json, .. } => {
+        Commands::MockRoute {
+            url_pattern,
+            response_json,
+            ..
+        } => {
             validate_non_empty(url_pattern, "url_pattern")?;
             validate_non_empty(response_json, "response_json")
         }
-
         Commands::DragAndDrop { source, target } => {
             validate_selector(source)?;
             validate_selector(target)
         }
-
-        Commands::Dom
-        | Commands::Title
-        | Commands::Url
-        | Commands::Refresh
-        | Commands::Back
-        | Commands::Forward
-        | Commands::Check { .. }
-        | Commands::Uncheck { .. }
-        | Commands::Cookies
-        | Commands::LocalClear
-        | Commands::SessionClear
-        | Commands::Console
-        | Commands::NetworkLogs
-        | Commands::WaitNetworkIdle
-        | Commands::WaitNav
-        | Commands::WaitHydration
-        | Commands::DioxusState
-        | Commands::SemanticTree
-        | Commands::Repl
-        | Commands::ScrollBy { .. } => Ok(()),
+        _ => Ok(()), // Handled by first function or no validation needed
     }
 }
 
@@ -305,7 +294,11 @@ pub fn generate_keypress_js(key: &str) -> String {
 }
 
 pub fn generate_keycombo_js(combo: &str) -> String {
-    let parts: Vec<String> = combo.split('+').map(str::trim).map(std::string::ToString::to_string).collect();
+    let parts: Vec<String> = combo
+        .split('+')
+        .map(str::trim)
+        .map(std::string::ToString::to_string)
+        .collect();
     let mut modifiers = Vec::new();
     let mut key: Option<String> = None;
 
@@ -328,14 +321,34 @@ pub fn generate_keycombo_js(combo: &str) -> String {
 }
 
 #[must_use]
-pub fn generate_storage_js(storage: &str, op: &str, key: Option<&str>, value: Option<&str>) -> String {
+pub fn generate_storage_js(
+    storage: &str,
+    op: &str,
+    key: Option<&str>,
+    value: Option<&str>,
+) -> String {
     match (storage, op, key, value) {
-        ("local", "get", Some(k), _) => format!("return localStorage.getItem('{}');", escape_js_string(k)),
-        ("local", "set", Some(k), Some(v)) => format!("localStorage.setItem('{}', '{}'); return true;", escape_js_string(k), escape_js_string(v)),
-        ("local", "remove", Some(k), _) => format!("localStorage.removeItem('{}'); return true;", escape_js_string(k)),
+        ("local", "get", Some(k), _) => {
+            format!("return localStorage.getItem('{}');", escape_js_string(k))
+        }
+        ("local", "set", Some(k), Some(v)) => format!(
+            "localStorage.setItem('{}', '{}'); return true;",
+            escape_js_string(k),
+            escape_js_string(v)
+        ),
+        ("local", "remove", Some(k), _) => format!(
+            "localStorage.removeItem('{}'); return true;",
+            escape_js_string(k)
+        ),
         ("local", "clear", None, _) => "localStorage.clear(); return true;".into(),
-        ("session", "get", Some(k), _) => format!("return sessionStorage.getItem('{}');", escape_js_string(k)),
-        ("session", "set", Some(k), Some(v)) => format!("sessionStorage.setItem('{}', '{}'); return true;", escape_js_string(k), escape_js_string(v)),
+        ("session", "get", Some(k), _) => {
+            format!("return sessionStorage.getItem('{}');", escape_js_string(k))
+        }
+        ("session", "set", Some(k), Some(v)) => format!(
+            "sessionStorage.setItem('{}', '{}'); return true;",
+            escape_js_string(k),
+            escape_js_string(v)
+        ),
         ("session", "clear", None, _) => "sessionStorage.clear(); return true;".into(),
         _ => "return null;".into(),
     }
@@ -375,7 +388,8 @@ pub fn generate_dioxus_state_js() -> String {
              try { states.push({ [key]: window[key] }); } catch(e) {}
          }
      }
-     return states.length > 0 ? states : null;".into()
+     return states.length > 0 ? states : null;"
+        .into()
 }
 
 #[must_use]
@@ -568,7 +582,8 @@ pub fn generate_network_idle_js() -> String {
             }
         }, 100);
         setTimeout(() => { clearInterval(check); resolve(false); }, 15000);
-    });".into()
+    });"
+    .into()
 }
 
 #[must_use]

@@ -1,7 +1,0 @@
-mock-route "api/data" '{"status":"mocked"}'
-click "#mock-btn"
-wait-network-idle
-get-text "#mock-result"
-click "#slow-btn"
-wait-network-idle
-get-text "#slow-result"
