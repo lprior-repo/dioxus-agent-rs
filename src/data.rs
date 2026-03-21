@@ -353,6 +353,27 @@ pub enum Commands {
         selector: String,
     },
 
+    // ============ AI Agent Advanced Capabilities ============
+    /// Fuzzy click an element by matching human-readable text on screen
+    FuzzyClick {
+        /// The exact or partial text of the button/link to click
+        text: String,
+    },
+    /// Wait for all background network requests (fetch/XHR) to settle
+    WaitNetworkIdle,
+    /// Scroll down repeatedly until an element containing text is found (great for virtual lists)
+    ScrollToText {
+        /// The CSS selector of the scrollable container
+        container: String,
+        /// The text to look for
+        text: String,
+    },
+    /// Extract an HTML table into clean, token-efficient JSON array
+    ExtractTable {
+        /// The CSS selector of the table
+        selector: String,
+    },
+
     // ============ Style ============
     /// Get computed style property
     Style {

@@ -14,9 +14,10 @@
 use crate::calculations::{
     generate_computed_style_js, generate_console_js, generate_css_injection_js,
     generate_dioxus_click_js, generate_dioxus_state_js, generate_element_screenshot_js,
-    generate_hydration_wait_js, generate_keycombo_js, generate_keypress_js,
-    generate_screenshot_annotated_js, generate_semantic_tree_js, generate_storage_js,
-    generate_wait_element_js, generate_wait_gone_js,
+    generate_extract_table_js, generate_fuzzy_click_js, generate_hydration_wait_js,
+    generate_keycombo_js, generate_keypress_js, generate_network_idle_js,
+    generate_screenshot_annotated_js, generate_scroll_to_text_js, generate_semantic_tree_js,
+    generate_storage_js, generate_wait_element_js, generate_wait_gone_js,
 };
 use crate::data::{Commands, Config};
 use anyhow::{Context, Result};
@@ -731,6 +732,43 @@ async fn execute_command_internal(
                 results.push(selector);
             }
             Ok(serde_json::json!(results))
+        }
+        Commands::FuzzyClick { text } => {
+            let js = generate_fuzzy_click_js(text);
+            let result: Value = client.execute(&js, vec![]).await.context("FuzzyClick execution failed")?;
+            if result.is_null() {
+                anyhow::bail!("FuzzyClick could not find interactable element with text: {text}");
+            }
+            Ok(serde_json::json!(result))
+        }
+        Commands::WaitNetworkIdle => {
+            let js = generate_network_idle_js();
+            let result: Value = client.execute(&js, vec![]).await.context("WaitNetworkIdle execution failed")?;
+            if result.as_bool() == Some(true) {
+                Ok(serde_json::json!("Network idle"))
+            } else {
+                anyhow::bail!("Timeout waiting for network to become idle");
+            }
+        }
+        Commands::ScrollToText { container, text } => {
+            let js = generate_scroll_to_text_js(container, text);
+            let result: Value = client.execute(&js, vec![]).await.context("ScrollToText execution failed")?;
+            if result.is_null() {
+                anyhow::bail!("ScrollToText container not found: {container}");
+            }
+            if result.as_bool() == Some(true) {
+                Ok(serde_json::json!(text))
+            } else {
+                anyhow::bail!("ScrollToText reached bottom but text was not found: {text}");
+            }
+        }
+        Commands::ExtractTable { selector } => {
+            let js = generate_extract_table_js(selector);
+            let result: Value = client.execute(&js, vec![]).await.context("ExtractTable execution failed")?;
+            if result.is_null() {
+                anyhow::bail!("ExtractTable target not found or has no headers: {selector}");
+            }
+            Ok(result)
         }
         Commands::NetworkLogs => {
             let result: Value = client

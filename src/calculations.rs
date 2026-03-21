@@ -71,11 +71,20 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
             validate_non_empty(value, "value")
         }
 
-        // Commands with selector + path
+        // ============ AI Agent Extended ============
         Commands::Upload { selector, path } => {
             validate_non_empty_selector(selector)?;
             validate_non_empty(path, "path")
         }
+
+        // ============ AI Agent Advanced Capabilities ============
+        Commands::FuzzyClick { text } => validate_non_empty(text, "text"),
+        Commands::WaitNetworkIdle => Ok(()),
+        Commands::ScrollToText { container, text } => {
+            validate_non_empty_selector(container)?;
+            validate_non_empty(text, "text")
+        }
+        Commands::ExtractTable { selector } => validate_non_empty_selector(selector),
 
         // Commands with json
         Commands::FillForm { json_data } => {
@@ -199,6 +208,7 @@ fn validate_command(cmd: &Commands) -> Result<(), String> {
         | Commands::SessionClear
         | Commands::Console
         | Commands::NetworkLogs
+        | Commands::WaitNetworkIdle
         | Commands::Wait { .. }
         | Commands::WaitGone { .. }
         | Commands::WaitNav
@@ -553,4 +563,111 @@ pub fn generate_console_js(console_type: Option<&str>) -> String {
         Some(t) => format!("return window.__captured_{t} || [];"),
         None => "return window.__captured_logs || [];".into(),
     }
+}
+
+/// Generate JavaScript for Fuzzy Click
+#[must_use]
+pub fn generate_fuzzy_click_js(text: &str) -> String {
+    format!(
+        "const targetText = '{}'.toLowerCase(); \
+        const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_ELEMENT, {{ \
+            acceptNode: (node) => {{ \
+                const tag = node.tagName.toLowerCase(); \
+                const interactable = ['a', 'button', 'input', 'select', 'textarea'].includes(tag) || node.hasAttribute('role') || node.hasAttribute('tabindex'); \
+                if (!interactable) return NodeFilter.FILTER_SKIP; \
+                const style = window.getComputedStyle(node); \
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return NodeFilter.FILTER_REJECT; \
+                return NodeFilter.FILTER_ACCEPT; \
+            }} \
+        }}); \
+        let node; \
+        let bestMatch = null; \
+        let exactMatch = false; \
+        while (node = iter.nextNode()) {{ \
+            const nodeText = (node.innerText || node.value || node.getAttribute('aria-label') || node.getAttribute('title') || '').toLowerCase(); \
+            if (nodeText === targetText) {{ \
+                bestMatch = node; \
+                exactMatch = true; \
+                break; \
+            }} else if (!exactMatch && nodeText.includes(targetText)) {{ \
+                bestMatch = node; \
+            }} \
+        }} \
+        if (bestMatch) {{ \
+            bestMatch.click(); \
+            const id = bestMatch.id ? '#' + bestMatch.id : ''; \
+            const cls = bestMatch.className ? '.' + bestMatch.className.split(' ').join('.') : ''; \
+            return id ? id : (cls ? bestMatch.tagName.toLowerCase() + cls : bestMatch.tagName.toLowerCase()); \
+        }} \
+        return null;",
+        text.replace('\'', "\\'")
+    )
+}
+
+/// Generate JS to Wait for Network Idle
+#[must_use]
+pub fn generate_network_idle_js() -> String {
+    "return new Promise((resolve) => {{ \
+        let idleCycles = 0; \
+        const check = setInterval(() => {{ \
+            if (window.__active_requests === 0 || typeof window.__active_requests === 'undefined') {{ \
+                idleCycles++; \
+                if (idleCycles >= 5) {{ \
+                    clearInterval(check); \
+                    resolve(true); \
+                }} \
+            }} else {{ \
+                idleCycles = 0; \
+            }} \
+        }}, 100); \
+        setTimeout(() => {{ clearInterval(check); resolve(false); }}, 15000); \
+    }});".into()
+}
+
+/// Generate JS to scroll and find text
+#[must_use]
+pub fn generate_scroll_to_text_js(container: &str, text: &str) -> String {
+    format!(
+        "return new Promise(async (resolve) => {{ \
+            const container = document.querySelector('{}'); \
+            if (!container) {{ resolve(null); return; }} \
+            const targetText = '{}'.toLowerCase(); \
+            let attempts = 0; \
+            while (attempts < 20) {{ \
+                const found = Array.from(container.querySelectorAll('*')).some(el => \
+                    el.children.length === 0 && el.textContent.toLowerCase().includes(targetText) \
+                ); \
+                if (found) {{ resolve(true); return; }} \
+                const oldScroll = container.scrollTop; \
+                container.scrollTop += container.clientHeight; \
+                if (container.scrollTop === oldScroll) {{ resolve(false); return; }} \
+                await new Promise(r => setTimeout(r, 200)); \
+                attempts++; \
+            }} \
+            resolve(false); \
+        }});",
+        container.replace('\'', "\\'"),
+        text.replace('\'', "\\'")
+    )
+}
+
+/// Generate JS to extract table
+#[must_use]
+pub fn generate_extract_table_js(selector: &str) -> String {
+    format!(
+        "const table = document.querySelector('{}'); \
+        if (!table) return null; \
+        const headers = Array.from(table.querySelectorAll('th')).map(th => th.innerText.trim()); \
+        if (headers.length === 0) return null; \
+        const rows = Array.from(table.querySelectorAll('tbody tr, tr:not(:first-child)')); \
+        return rows.map(row => {{ \
+            const cells = Array.from(row.querySelectorAll('td')); \
+            const obj = {{}}; \
+            headers.forEach((h, i) => {{ \
+                obj[h] = cells[i] ? cells[i].innerText.trim() : ''; \
+            }}); \
+            return obj; \
+        }});",
+        selector.replace('\'', "\\'")
+    )
 }
